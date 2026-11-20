@@ -1,0 +1,33 @@
+# Xcode 构建产物和本机用户状态
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# 本仓库的模拟器构建目录
+.derived/
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+
+# 系统和编辑器自己的文件
+.DS_Store
+*.swp
+*~
+.idea/
