@@ -10,6 +10,13 @@ enum SokobanRecords {
         return UserDefaults.standard.integer(forKey: key)
     }
 
+    /// 这一段里已经写下最少步数的关数。没有数字不算已过。
+    static func clearedCount(from start: Int, through end: Int) -> Int {
+        (start...end).reduce(0) { count, level in
+            count + (best(level: level) == nil ? 0 : 1)
+        }
+    }
+
     /// 只有更少的步数才替换这一关的纪录。
     @discardableResult
     static func record(level: Int, steps: Int) -> Int {

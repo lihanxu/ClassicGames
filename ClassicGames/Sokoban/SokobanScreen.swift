@@ -117,49 +117,87 @@ struct SokobanWinMark: View {
     }
 }
 
-/// 100 关的编号。点一关就换过去，这一局丢掉。
+/// 100 关按难度分成五组。点编号进入该关开局，标题不响应点击。
 struct SokobanLevelPicker: View {
     var current: Int
     var onPick: (Int) -> Void
 
     private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 5)
+    /// 分组界线和需求一致。每组 20 关，标题写已过数。
+    private let groups: [(name: String, start: Int, end: Int)] = [
+        ("入门", 1, 20),
+        ("初级", 21, 40),
+        ("中级", 41, 60),
+        ("进阶", 61, 80),
+        ("挑战", 81, 100)
+    ]
 
     var body: some View {
         NavigationStack {
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 8) {
-                    ForEach(1...SokobanLevels.count, id: \.self) { number in
-                        Button {
-                            onPick(number)
-                        } label: {
-                            Text("\(number)")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity, minHeight: 46)
-                                .foregroundStyle(number == current ? Color.white : SokobanPalette.ink)
-                                .background(
-                                    number == current ? SokobanPalette.player : SokobanPalette.key,
-                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                )
-                                .overlay {
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .strokeBorder(SokobanPalette.wallEdge, lineWidth: 1)
-                                }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("sokoban.pick.\(number)")
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(SokobanLevels.credit)
+                        .font(.footnote)
+                        .foregroundStyle(SokobanPalette.ink.opacity(0.7))
+                        .frame(maxWidth: .infinity)
+                        .accessibilityIdentifier("sokoban.credit")
+                    ForEach(groups, id: \.name) { group in
+                        groupSection(group.name, group.start, group.end)
                     }
                 }
                 .padding(16)
-                Text(SokobanLevels.credit)
-                    .font(.footnote)
-                    .foregroundStyle(SokobanPalette.ink.opacity(0.7))
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 16)
             }
             .background(SokobanPalette.floor.ignoresSafeArea())
             .navigationTitle("选关")
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    /// 一组的标题和编号。标题只展示进度，点它不换关。
+    private func groupSection(_ name: String, _ start: Int, _ end: Int) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(verbatim: "\(name) \(SokobanRecords.clearedCount(from: start, through: end))/20")
+                .font(.headline)
+                .foregroundStyle(SokobanPalette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("sokoban.group.\(name)")
+            LazyVGrid(columns: columns, spacing: 8) {
+                ForEach(start...end, id: \.self) { number in
+                    levelButton(number)
+                }
+            }
+        }
+    }
+
+    /// 一关的编号。已过的在编号下写「已过」；当前关保留深色描边。
+    private func levelButton(_ number: Int) -> some View {
+        let cleared = SokobanRecords.best(level: number) != nil
+        let selected = number == current
+        return Button {
+            onPick(number)
+        } label: {
+            VStack(spacing: 2) {
+                Text("\(number)")
+                    .font(.headline)
+                if cleared {
+                    Text("已过")
+                        .font(.caption.weight(.semibold))
+                        .accessibilityIdentifier("sokoban.cleared.\(number)")
+                }
+            }
+            .foregroundStyle(selected ? Color.white : SokobanPalette.ink)
+            .frame(maxWidth: .infinity, minHeight: cleared ? 64 : 46)
+            .background(
+                selected ? SokobanPalette.player : SokobanPalette.key,
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(SokobanPalette.wallEdge, lineWidth: selected ? 3 : 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("sokoban.pick.\(number)")
     }
 }
 

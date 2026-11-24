@@ -127,6 +127,69 @@ final class SokobanUITests: XCTestCase {
         XCTAssertTrue(app.buttons["chrome.back"].isHittable)
     }
 
+    /// 选关能看出已过和五组难度。当前关描边还在，点编号仍进入该关开局。
+    func testClearedMarksAndDifficultyGroups() {
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        app.buttons["pad.left"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 0")
+
+        play(SokobanMoves.short)
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        XCTAssertTrue(app.staticTexts["过关"].waitForExistence(timeout: 2))
+
+        app.buttons["sokoban.levels"].tap()
+        let intro = app.staticTexts["sokoban.group.入门"]
+        XCTAssertTrue(intro.waitForExistence(timeout: 5))
+        XCTAssertEqual(intro.label, "入门 1/20")
+        XCTAssertFalse(app.buttons["sokoban.group.入门"].exists)
+        let credit = app.staticTexts["sokoban.credit"]
+        XCTAssertTrue(credit.exists)
+        XCTAssertLessThan(credit.frame.maxY, intro.frame.minY)
+        XCTAssertEqual(app.staticTexts["sokoban.group.初级"].label, "初级 0/20")
+        XCTAssertTrue(app.staticTexts["sokoban.cleared.1"].exists)
+        XCTAssertFalse(app.staticTexts["sokoban.cleared.2"].exists)
+        XCTAssertTrue(app.buttons["sokoban.pick.1"].exists)
+        let level20 = app.buttons["sokoban.pick.20"]
+        XCTAssertTrue(level20.waitForExistence(timeout: 2))
+        level20.tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level20)
+        XCTAssertEqual(app.staticTexts["sokoban.level"].label, "第 20 关 / 100")
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 —")
+
+        app.buttons["chrome.restart"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level20)
+        app.buttons["sokoban.levels"].tap()
+        XCTAssertTrue(intro.waitForExistence(timeout: 5))
+        XCTAssertEqual(intro.label, "入门 1/20")
+        XCTAssertTrue(app.staticTexts["sokoban.cleared.1"].exists)
+        app.buttons["sokoban.pick.1"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
+
+        app.buttons["sokoban.levels"].tap()
+        XCTAssertTrue(intro.waitForExistence(timeout: 5))
+        let level100 = app.buttons["sokoban.pick.100"]
+        var swipes = 0
+        while !level100.isHittable && swipes < 8 {
+            app.swipeUp()
+            swipes += 1
+        }
+        XCTAssertTrue(level100.isHittable)
+        XCTAssertEqual(app.staticTexts["sokoban.group.挑战"].label, "挑战 0/20")
+        level100.tap()
+        XCTAssertEqual(app.staticTexts["sokoban.level"].label, "第 100 关 / 100")
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 —")
+        XCTAssertFalse(app.staticTexts["过关"].exists)
+
+        app.buttons["chrome.back"].tap()
+        XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["home.best.sokoban"].label, "最高 33")
+    }
+
     /// 进入推箱子后背景循环开始；走一步有声，顶墙和推动不加这次计数；回首页和其他七款都停。
     func testBackgroundStartsOnEnterAndStopsOnLeave() {
         launch(hearing: "audible")
