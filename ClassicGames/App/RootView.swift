@@ -3,6 +3,7 @@ import SwiftUI
 /// 根导航。路径里只放游戏标识，返回时弹出，重新开始不改路径。
 struct RootView: View {
     @Environment(AppRouter.self) private var router
+    @Environment(SokobanAudio.self) private var audio
 
     var body: some View {
         @Bindable var router = router
@@ -11,6 +12,23 @@ struct RootView: View {
                 .navigationDestination(for: GameID.self) { id in
                     GameDestination(id: id)
                 }
+        }
+        .background(alignment: .top) {
+            Text(verbatim: audio.token)
+                .font(.system(size: 1))
+                .foregroundStyle(ShellPalette.ink.opacity(0.02))
+                .accessibilityIdentifier("sokoban.audio")
+                .accessibilityLabel(audio.token)
+                .accessibilityValue(audio.token)
+                .allowsHitTesting(false)
+        }
+        .onChange(of: router.path) { _, path in
+            // 只有路径停在推箱子才循环。回首页或其他游戏都停。
+            if path.last == .sokoban {
+                audio.enter()
+            } else {
+                audio.leave()
+            }
         }
     }
 }

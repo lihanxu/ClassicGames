@@ -6,6 +6,7 @@ import UIKit
 struct ClassicGamesApp: App {
     @State private var scores = ScoreStore()
     @State private var router = AppRouter()
+    @State private var sokobanAudio = SokobanAudio()
 
     init() {
         // 模拟器检查关掉转场动画，避免进游戏前蛇已经撞墙。正式游玩没有这个参数。
@@ -19,6 +20,7 @@ struct ClassicGamesApp: App {
             RootView()
                 .environment(scores)
                 .environment(router)
+                .environment(sokobanAudio)
         }
     }
 }

@@ -127,6 +127,133 @@ final class SokobanUITests: XCTestCase {
         XCTAssertTrue(app.buttons["chrome.back"].isHittable)
     }
 
+    /// 进入推箱子后背景循环开始；走一步有声，顶墙和推动不加这次计数；回首页和其他七款都停。
+    func testBackgroundStartsOnEnterAndStopsOnLeave() {
+        launch(hearing: "audible")
+        waitAudio(["bgm": "stopped", "engine": "0", "steps": "0", "wins": "0"])
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        waitAudio(["bgm": "playing", "engine": "1", "steps": "0", "wins": "0"])
+
+        app.buttons["pad.left"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        waitAudio(["bgm": "playing", "engine": "1", "steps": "0"])
+
+        app.buttons["pad.down"].tap()
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 1")
+        waitAudio(["steps": "1"])
+
+        app.buttons["pad.right"].tap()
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 2")
+        waitAudio(["bgm": "playing", "engine": "1", "steps": "1", "wins": "0"])
+
+        app.buttons["chrome.back"].tap()
+        XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
+        waitAudio(["bgm": "stopped", "engine": "0", "steps": "1"])
+
+        for identifier in ["snake", "breakout", "game2048", "minesweeper", "memory", "gomoku", "platformer"] {
+            openHomeRow(identifier)
+            XCTAssertTrue(app.buttons["chrome.back"].waitForExistence(timeout: 5))
+            waitAudio(["bgm": "stopped", "engine": "0"])
+            app.buttons["chrome.back"].tap()
+            XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
+            waitAudio(["bgm": "stopped", "engine": "0"])
+        }
+    }
+
+    /// 过关短乐在走完第 1 关后发出。这一关最短解有 25 声脚步，推动不加。
+    func testClearPlaysShortTune() {
+        launch(hearing: "audible")
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        play(SokobanMoves.short)
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        XCTAssertTrue(app.staticTexts["过关"].waitForExistence(timeout: 2))
+        waitAudio(["bgm": "playing", "engine": "1", "steps": "25", "wins": "1"], timeout: 2)
+        app.buttons["chrome.back"].tap()
+        XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
+        waitAudio(["bgm": "stopped", "engine": "0"])
+    }
+
+    /// 系统静音时背景循环不送出，走步和过关也不计数。
+    func testSilentEmitsNothing() {
+        launch(hearing: "silent")
+        waitAudio(["bgm": "stopped", "engine": "0"])
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+
+        app.buttons["pad.left"].tap()
+        app.buttons["pad.down"].tap()
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 1")
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+
+        app.buttons["chrome.restart"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        play(SokobanMoves.short)
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+
+        app.buttons["chrome.back"].tap()
+        XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
+        waitAudio(["bgm": "stopped", "engine": "0", "steps": "0", "wins": "0"])
+    }
+
+    /// 用固定的听感重新打开。正式游玩不带这个参数。
+    private func launch(hearing: String) {
+        app.terminate()
+        app = XCUIApplication()
+        app.launchArguments = ["-ui-testing", "-reset-game", "sokoban", "-sokoban-hearing", hearing]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+    }
+
+    /// 首页某一行。列表比屏幕高时先滚到能点。
+    private func openHomeRow(_ identifier: String) {
+        let row = app.buttons["home.row.\(identifier)"]
+        if !(row.exists && row.isHittable) {
+            app.swipeDown()
+            app.swipeDown()
+        }
+        if !(row.exists && row.isHittable) {
+            app.swipeUp()
+        }
+        XCTAssertTrue(row.waitForExistence(timeout: 3))
+        row.tap()
+    }
+
+    /// 等到 `sokoban.audio` 里的字段和期望一致。
+    private func waitAudio(_ expected: [String: String], timeout: TimeInterval = 3) {
+        XCTAssertTrue(app.staticTexts["sokoban.audio"].waitForExistence(timeout: 5), "找不到推箱子声音状态")
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = ""
+        while Date() < deadline {
+            last = app.staticTexts["sokoban.audio"].label
+            let fields = audioFields(last)
+            if expected.allSatisfy({ fields[$0.key] == $0.value }) {
+                return
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        XCTFail("音频状态是 \(last)，期望 \(expected)")
+    }
+
+    /// `bgm:playing;engine:1;steps:0;wins:0` 拆成字段。
+    private func audioFields(_ token: String) -> [String: String] {
+        var fields: [String: String] = [:]
+        for part in token.split(separator: ";") {
+            let pair = part.split(separator: ":", maxSplits: 1)
+            if pair.count == 2 {
+                fields[String(pair[0])] = String(pair[1])
+            }
+        }
+        return fields
+    }
+
     /// 方向键按顺序点。每一步都进同一个移动方法。
     private func play(_ moves: [String]) {
         for move in moves {

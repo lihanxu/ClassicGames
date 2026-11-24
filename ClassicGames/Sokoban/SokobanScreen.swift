@@ -2,6 +2,7 @@ import SwiftUI
 
 /// 推箱子这一局。外框负责返回和总纪录，这里画关卡、棋盘和选关。
 struct SokobanScreen: View {
+    @Environment(SokobanAudio.self) private var audio
     @State private var model = SokobanModel()
     @State private var showPicker = false
 
@@ -23,13 +24,11 @@ struct SokobanScreen: View {
                     .foregroundStyle(SokobanPalette.target)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("sokoban.best")
-                SokobanBoard(model: model)
+                SokobanBoard(model: model, onMove: move)
                 if model.won {
                     winRow
                 }
-                SokobanPad(locked: model.won) { direction in
-                    model.move(direction)
-                }
+                SokobanPad(locked: model.won, onMove: move)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
@@ -79,6 +78,22 @@ struct SokobanScreen: View {
                     .background(SokobanPalette.player, in: Capsule())
                     .accessibilityIdentifier("sokoban.next")
             }
+        }
+    }
+
+    /// 按这一步的结果发声。步数没加就是顶墙或推不动，不响。人动而箱子没动才有脚步。过关短乐等这一格过渡结束：走出一格 140 毫秒，推动一格 180 毫秒。
+    private func move(_ direction: SokobanDirection) {
+        let stepsBefore = model.steps
+        let boxesBefore = model.boxes
+        let wonBefore = model.won
+        model.move(direction)
+        guard model.steps > stepsBefore else { return }
+        let pushed = model.boxes != boxesBefore
+        if !pushed {
+            audio.playFootstep()
+        }
+        if !wonBefore && model.won {
+            audio.playClear(afterMilliseconds: pushed ? 180 : 140)
         }
     }
 
@@ -151,6 +166,7 @@ struct SokobanLevelPicker: View {
 /// 用色块画出当前关。格子太小时可以滚动，避免人和箱子缩成一点。
 struct SokobanBoard: View {
     var model: SokobanModel
+    var onMove: (SokobanDirection) -> Void
 
     /// 格子之间的缝。墙色从缝里露出来。
     private let gutter: CGFloat = 2
@@ -242,9 +258,9 @@ struct SokobanBoard: View {
             let dx = value.translation.width
             let dy = value.translation.height
             if abs(dx) > abs(dy) {
-                model.move(dx > 0 ? .right : .left)
+                onMove(dx > 0 ? .right : .left)
             } else {
-                model.move(dy > 0 ? .down : .up)
+                onMove(dy > 0 ? .down : .up)
             }
         }
     }

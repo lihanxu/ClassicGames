@@ -27,6 +27,7 @@
 		73A42C6875966935B8988BBA /* Game2048Model.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8DBAD899AA4491C929F046 /* Game2048Model.swift */; };
 		7546D24FB6D1BACDF0873A62 /* BreakoutScene.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FD7F1DDC5B48B9F02EC43BD /* BreakoutScene.swift */; };
 		883547DE80878B248846A20E /* SokobanScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C2997DBF26264D106345033 /* SokobanScreen.swift */; };
+		9F2E6B80C4A14D73B8E5F021 /* SokobanAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7C4A91B2D8F4E60A1B5C3D9 /* SokobanAudio.swift */; };
 		8D649443B0BED3A94011BA08 /* Game2048UITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C46BD0A48EBCFD1158FCD53 /* Game2048UITests.swift */; };
 		98DC2D895BB6BE7D84E2FF32 /* GomokuModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E53E6FD003942E8BBFDD2053 /* GomokuModel.swift */; };
 		9AC53D33F5F7698D9417E31A /* PlatformerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = D166791D0139EBBE6AECC05E /* PlatformerModel.swift */; };
@@ -66,6 +67,7 @@
 		07AAA1BCA11FF9E388EC1354 /* Phase2UITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase2UITests.swift; sourceTree = "<group>"; };
 		08A9670F1C228B7C0729425B /* SokobanModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanModel.swift; sourceTree = "<group>"; };
 		0C2997DBF26264D106345033 /* SokobanScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanScreen.swift; sourceTree = "<group>"; };
+		E7C4A91B2D8F4E60A1B5C3D9 /* SokobanAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanAudio.swift; sourceTree = "<group>"; };
 		0D6A4E8A0D353177022610E1 /* ScoreStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScoreStore.swift; sourceTree = "<group>"; };
 		151B46DC900B1EB04D670FC3 /* GameID.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameID.swift; sourceTree = "<group>"; };
 		1EEBC1B295A79685D57050F2 /* PlatformerScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformerScreen.swift; sourceTree = "<group>"; };
@@ -197,6 +199,7 @@
 				CF656AFFC7EA4D48150F8F42 /* SokobanLevel.swift */,
 				F4C8A91E2B7D4A60C5E13F88 /* SokobanLevels.swift */,
 				08A9670F1C228B7C0729425B /* SokobanModel.swift */,
+				E7C4A91B2D8F4E60A1B5C3D9 /* SokobanAudio.swift */,
 				0C2997DBF26264D106345033 /* SokobanScreen.swift */,
 			);
 			path = Sokoban;
@@ -408,6 +411,7 @@
 				20F1B162596EA9D1FE879F6B /* SokobanLevel.swift in Sources */,
 				A9D0E71B3C6F4825D4A8B190 /* SokobanLevels.swift in Sources */,
 				D0DDA09767016220CBEDA199 /* SokobanModel.swift in Sources */,
+				9F2E6B80C4A14D73B8E5F021 /* SokobanAudio.swift in Sources */,
 				883547DE80878B248846A20E /* SokobanScreen.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
