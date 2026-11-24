@@ -56,9 +56,32 @@ final class SokobanModel {
     private var initialPlayer = GridPoint(row: 0, col: 0)
     private var undoStack: [SokobanFrame] = []
     private var redoStack: [SokobanFrame] = []
+    /// 中途局面。和最高纪录、每关最少步数都不是同一个键。
+    private static let resumeKey = "classicgames.sokoban.resume"
+    /// 启动参数只在这一进程里生效一次。返回后再进入不能把刚写下的局面清掉。
+    private static var didHonorResetArgument = false
 
     init() {
-        load(1)
+        let arguments = ProcessInfo.processInfo.arguments
+        if !Self.didHonorResetArgument {
+            Self.didHonorResetArgument = true
+            if let index = arguments.firstIndex(of: "-reset-game"),
+               arguments.indices.contains(index + 1),
+               arguments[index + 1] == GameID.sokoban.rawValue {
+                UserDefaults.standard.removeObject(forKey: Self.resumeKey)
+            }
+        }
+        let injected = arguments.firstIndex(of: "-sokoban-resume").flatMap { index -> String? in
+            arguments.indices.contains(index + 1) ? arguments[index + 1] : nil
+        }
+        let stored = injected ?? UserDefaults.standard.string(forKey: Self.resumeKey)
+        if let stored {
+            if !applyResume(stored) {
+                load(1, persist: true)
+            }
+            return
+        }
+        load(1, persist: false)
     }
 
     /// 走一步。顶墙、顶箱子但箱子前方走不通，都不算步。过关后不再移动。成功才记入撤销。
@@ -72,6 +95,7 @@ final class SokobanModel {
         guard let previous = undoStack.popLast() else { return false }
         redoStack.append(currentFrame)
         restore(previous)
+        persist()
         return true
     }
 
@@ -81,6 +105,7 @@ final class SokobanModel {
         guard let next = redoStack.popLast() else { return false }
         undoStack.append(currentFrame)
         restore(next)
+        persist()
         return true
     }
 
@@ -110,6 +135,7 @@ final class SokobanModel {
                 levelBest = SokobanRecords.record(level: levelNumber, steps: steps)
             }
         }
+        persist()
         return true
     }
 
@@ -221,10 +247,16 @@ final class SokobanModel {
         winCounts = false
         undoStack.removeAll()
         redoStack.removeAll()
+        persist()
     }
 
-    /// 打开编号对应的关。这一局丢掉，各关纪录保留。
+    /// 打开编号对应的关。这一局丢掉，各关纪录保留，并写下这一关的开局。
     func load(_ number: Int) {
+        load(number, persist: true)
+    }
+
+    /// 换到这一关的开局。第一次进入且没有存档时不写入。
+    private func load(_ number: Int, persist shouldPersist: Bool) {
         let clamped = min(max(number, 1), SokobanLevels.count)
         let level = SokobanLevel.parsed(clamped)
         levelNumber = clamped
@@ -243,6 +275,9 @@ final class SokobanModel {
         undoStack.removeAll()
         redoStack.removeAll()
         levelBest = SokobanRecords.best(level: clamped)
+        if shouldPersist {
+            persist()
+        }
     }
 
     /// 过关后进入下一关。还没过关，或已经是最后一关，就停在原地。
@@ -259,6 +294,49 @@ final class SokobanModel {
         .map { "\($0.row),\($0.col)" }
         .joined(separator: "|")
         return "level:\(levelNumber);player:\(player.row),\(player.col);boxes:\(boxText);steps:\(steps);won:\(won);face:\(facing.name)"
+    }
+
+    /// 把当前局面写进 UserDefaults。不写最高纪录，也不写每关最少步数。
+    private func persist() {
+        let text = SokobanResume.encode(
+            level: levelNumber,
+            player: player,
+            boxes: boxes,
+            steps: steps,
+            facing: facing,
+            won: won,
+            counts: winCounts,
+            undo: undoStack,
+            redo: redoStack
+        )
+        UserDefaults.standard.set(text, forKey: Self.resumeKey)
+    }
+
+    /// 读回一局。关号、朝向或箱子数量不对就拒绝，调用方改回第 1 关开局。不写纪录。
+    private func applyResume(_ raw: String) -> Bool {
+        guard let parsed = SokobanResume.parse(raw) else { return false }
+        let level = SokobanLevel.parsed(parsed.level)
+        let boxCount = level.boxes.count
+        guard parsed.boxes.count == boxCount,
+              parsed.undo.allSatisfy({ $0.boxes.count == boxCount }),
+              parsed.redo.allSatisfy({ $0.boxes.count == boxCount }) else { return false }
+        levelNumber = parsed.level
+        rows = level.rows
+        cols = level.cols
+        walls = level.walls
+        targets = level.targets
+        boxes = parsed.boxes
+        player = parsed.player
+        initialBoxes = level.boxes
+        initialPlayer = level.player
+        steps = parsed.steps
+        facing = parsed.facing
+        won = parsed.won
+        winCounts = parsed.counts
+        undoStack = parsed.undo
+        redoStack = parsed.redo
+        levelBest = SokobanRecords.best(level: parsed.level)
+        return true
     }
 
     private func contains(_ point: GridPoint) -> Bool {
@@ -306,6 +384,154 @@ extension Array where Element == SokobanDirection {
         guard count > 1 else { return 0 }
         return zip(self, dropFirst()).reduce(0) { total, pair in
             total + (pair.0 == pair.1 ? 0 : 1)
+        }
+    }
+}
+
+/// 中途局面编成一行。字段用竖线分开，栈里的每一帧用分号分开。
+private enum SokobanResume {
+    struct Parsed {
+        var level: Int
+        var player: GridPoint
+        var boxes: Set<GridPoint>
+        var steps: Int
+        var facing: SokobanDirection
+        var won: Bool
+        var counts: Bool
+        var undo: [SokobanFrame]
+        var redo: [SokobanFrame]
+    }
+
+    /// 把这一局和两套栈写成一行。箱子按行列排序，避免集合顺序抖动。
+    static func encode(
+        level: Int,
+        player: GridPoint,
+        boxes: Set<GridPoint>,
+        steps: Int,
+        facing: SokobanDirection,
+        won: Bool,
+        counts: Bool,
+        undo: [SokobanFrame],
+        redo: [SokobanFrame]
+    ) -> String {
+        [
+            "\(level)",
+            point(player),
+            boxList(boxes),
+            "\(steps)",
+            facing.name,
+            won ? "1" : "0",
+            counts ? "1" : "0",
+            undo.map(frame).joined(separator: ";"),
+            redo.map(frame).joined(separator: ";")
+        ].joined(separator: "|")
+    }
+
+    /// 拆开一行。关号不在 1 到 100，或朝向不是四个方向之一，就整行作废。
+    static func parse(_ raw: String) -> Parsed? {
+        let fields = raw.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        guard fields.count == 9,
+              let level = Int(fields[0]),
+              (1...SokobanLevels.count).contains(level),
+              let player = point(fields[1]),
+              let boxes = boxes(fields[2]),
+              let steps = Int(fields[3]),
+              let facing = direction(fields[4]),
+              let won = flag(fields[5]),
+              let counts = flag(fields[6]),
+              let undo = frames(fields[7]),
+              let redo = frames(fields[8]) else { return nil }
+        return Parsed(
+            level: level,
+            player: player,
+            boxes: boxes,
+            steps: steps,
+            facing: facing,
+            won: won,
+            counts: counts,
+            undo: undo,
+            redo: redo
+        )
+    }
+
+    private static func frame(_ frame: SokobanFrame) -> String {
+        [
+            point(frame.player),
+            boxList(frame.boxes),
+            "\(frame.steps)",
+            frame.facing.name,
+            frame.won ? "1" : "0",
+            frame.counts ? "1" : "0"
+        ].joined(separator: "*")
+    }
+
+    private static func frames(_ raw: String) -> [SokobanFrame]? {
+        if raw.isEmpty { return [] }
+        var decoded: [SokobanFrame] = []
+        for piece in raw.split(separator: ";", omittingEmptySubsequences: false) {
+            let fields = piece.split(separator: "*", omittingEmptySubsequences: false).map(String.init)
+            guard fields.count == 6,
+                  let player = point(fields[0]),
+                  let boxes = boxes(fields[1]),
+                  let steps = Int(fields[2]),
+                  let facing = direction(fields[3]),
+                  let won = flag(fields[4]),
+                  let counts = flag(fields[5]) else { return nil }
+            decoded.append(SokobanFrame(
+                player: player,
+                boxes: boxes,
+                steps: steps,
+                facing: facing,
+                won: won,
+                counts: counts
+            ))
+        }
+        return decoded
+    }
+
+    private static func boxList(_ boxes: Set<GridPoint>) -> String {
+        boxes.sorted { lhs, rhs in
+            lhs.row == rhs.row ? lhs.col < rhs.col : lhs.row < rhs.row
+        }
+        .map(point)
+        .joined(separator: "+")
+    }
+
+    private static func boxes(_ raw: String) -> Set<GridPoint>? {
+        if raw.isEmpty { return [] }
+        var points: Set<GridPoint> = []
+        for piece in raw.split(separator: "+", omittingEmptySubsequences: false) {
+            guard let point = point(String(piece)) else { return nil }
+            points.insert(point)
+        }
+        return points
+    }
+
+    private static func point(_ point: GridPoint) -> String {
+        "\(point.row),\(point.col)"
+    }
+
+    private static func point(_ raw: String) -> GridPoint? {
+        let parts = raw.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count == 2, let row = Int(parts[0]), let col = Int(parts[1]) else { return nil }
+        return GridPoint(row: row, col: col)
+    }
+
+    private static func direction(_ name: String) -> SokobanDirection? {
+        switch name {
+        case "up": .up
+        case "down": .down
+        case "left": .left
+        case "right": .right
+        default: nil
+        }
+    }
+
+    private static func flag(_ raw: String) -> Bool? {
+        switch raw {
+        case "1": true
+        case "0": false
+        default: nil
         }
     }
 }
