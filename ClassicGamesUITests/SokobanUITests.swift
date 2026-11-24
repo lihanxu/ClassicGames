@@ -629,6 +629,106 @@ final class SokobanUITests: XCTestCase {
         waitAudio(["bgm": "stopped", "engine": "0", "steps": "0", "wins": "0"])
     }
 
+    /// 上线完成度：从首页走到过关、下一关、纪录和静音，一次点完。
+    func testReleaseChecklist() {
+        launch(hearing: "audible")
+        waitAudio(["bgm": "stopped", "engine": "0"])
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        waitAudio(["bgm": "playing", "engine": "1", "steps": "0", "wins": "0"])
+
+        app.buttons["sokoban.levels"].tap()
+        XCTAssertTrue(app.staticTexts["sokoban.credit"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["sokoban.group.入门"].label, "入门 0/20")
+        app.buttons["sokoban.pick.1"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        app.buttons["pad.left"].tap()
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "bump:120")
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        app.buttons["pad.down"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "walk:140")
+        waitAudio(["steps": "1", "wins": "0"])
+        app.buttons["pad.right"].tap()
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "push:180")
+        XCTAssertEqual(board.value as? String, "level:1;player:4,3;boxes:3,1|4,4;steps:2;won:false;face:right")
+        app.buttons["sokoban.undo"].tap()
+        app.buttons["sokoban.redo"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,3;boxes:3,1|4,4;steps:2;won:false;face:right")
+
+        app.buttons["chrome.restart"].tap()
+        tapCell(board, row: 3, col: 4)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "path:walk:140+walk:140")
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 1")
+        app.buttons["sokoban.redo"].tap()
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 2")
+
+        app.buttons["chrome.restart"].tap()
+        app.buttons["sokoban.hint"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "walk:140")
+
+        app.buttons["sokoban.levels"].tap()
+        let level2 = app.buttons["sokoban.pick.2"]
+        XCTAssertTrue(level2.waitForExistence(timeout: 5))
+        level2.tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        app.buttons["sokoban.hint"].tap()
+        app.buttons["sokoban.solution"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "这一关没有解")
+
+        app.buttons["sokoban.levels"].tap()
+        let level1 = app.buttons["sokoban.pick.1"]
+        XCTAssertTrue(level1.waitForExistence(timeout: 5))
+        level1.tap()
+        app.buttons["pad.down"].tap()
+        let parked = "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down"
+        XCTAssertEqual(board.value as? String, parked)
+        app.buttons["chrome.back"].tap()
+        XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
+        app.buttons["home.row.sokoban"].tap()
+        XCTAssertEqual(board.value as? String, parked)
+        app.terminate()
+        app.launchArguments = ["-ui-testing"]
+        app.launch()
+        XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        XCTAssertEqual(board.value as? String, parked)
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        play(SokobanMoves.short)
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
+        XCTAssertEqual(app.staticTexts["chrome.best"].label, "最高纪录 33")
+        let locked = board.value as? String
+        app.buttons["pad.up"].tap()
+        XCTAssertEqual(board.value as? String, locked)
+
+        app.buttons["chrome.restart"].tap()
+        play(SokobanMoves.long)
+        XCTAssertEqual(board.value as? String, SokobanMoves.longWin)
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
+        app.buttons["sokoban.next"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        app.buttons["chrome.restart"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        app.buttons["chrome.back"].tap()
+        XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["home.best.sokoban"].label, "最高 33")
+
+        launch(hearing: "silent")
+        app.buttons["home.row.sokoban"].tap()
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        app.buttons["pad.down"].tap()
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+    }
+
     /// 用固定的听感重新打开。正式游玩不带这个参数。
     private func launch(hearing: String) {
         app.terminate()
