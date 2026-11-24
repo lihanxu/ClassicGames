@@ -49,33 +49,83 @@ final class SokobanModel {
     private(set) var levelBest: Int?
     /// 脸朝的方向。开局、重开和换关是下。顶墙不改。
     private(set) var facing: SokobanDirection = .down
+    /// 这次过关是否写入纪录。正式的一步才算；看解造成的过关不算。
+    private(set) var winCounts = false
 
     private var initialBoxes: Set<GridPoint> = []
     private var initialPlayer = GridPoint(row: 0, col: 0)
+    private var undoStack: [SokobanFrame] = []
+    private var redoStack: [SokobanFrame] = []
 
     init() {
         load(1)
     }
 
-    /// 走一步。顶墙、顶箱子但箱子前方走不通，都不算步。过关后不再移动。
+    /// 走一步。顶墙、顶箱子但箱子前方走不通，都不算步。过关后不再移动。成功才记入撤销。
     func move(_ direction: SokobanDirection) {
-        guard !won else { return }
+        _ = step(direction, countsOnWin: true)
+    }
+
+    /// 退回上一格。栈空或已经是开局则不变。不改纪录，也不换关。
+    @discardableResult
+    func undo() -> Bool {
+        guard let previous = undoStack.popLast() else { return false }
+        redoStack.append(currentFrame)
+        restore(previous)
+        return true
+    }
+
+    /// 把刚撤销的那一格放回来。没有可重做的步则不变。
+    @discardableResult
+    func redo() -> Bool {
+        guard let next = redoStack.popLast() else { return false }
+        undoStack.append(currentFrame)
+        restore(next)
+        return true
+    }
+
+    /// 成功的一格。先记下走之前的局面，再改人和箱子。过关且参加比较时才写本关纪录。
+    @discardableResult
+    private func step(_ direction: SokobanDirection, countsOnWin: Bool) -> Bool {
+        guard !won else { return false }
         let next = player.moving(direction)
-        guard contains(next), !walls.contains(next) else { return }
-        if boxes.contains(next) {
+        guard contains(next), !walls.contains(next) else { return false }
+        var nextBoxes = boxes
+        if nextBoxes.contains(next) {
             let beyond = next.moving(direction)
-            guard contains(beyond), !walls.contains(beyond), !boxes.contains(beyond) else { return }
-            boxes.remove(next)
-            boxes.insert(beyond)
+            guard contains(beyond), !walls.contains(beyond), !nextBoxes.contains(beyond) else { return false }
+            nextBoxes.remove(next)
+            nextBoxes.insert(beyond)
         }
+        undoStack.append(currentFrame)
+        redoStack.removeAll()
+        boxes = nextBoxes
         facing = direction
         player = next
         steps += 1
-        // 箱子和目标必须正好重合。有箱子没到位，或目标还空着，都不算过关。
         if boxes == targets {
             won = true
-            levelBest = SokobanRecords.record(level: levelNumber, steps: steps)
+            winCounts = countsOnWin
+            if countsOnWin {
+                levelBest = SokobanRecords.record(level: levelNumber, steps: steps)
+            }
         }
+        return true
+    }
+
+    /// 走之前的一帧。撤销和重做只换这帧，不写纪录。
+    private var currentFrame: SokobanFrame {
+        SokobanFrame(player: player, boxes: boxes, steps: steps, facing: facing, won: won, counts: winCounts)
+    }
+
+    /// 把人和箱子、步数、朝向、过关放回这一帧。
+    private func restore(_ frame: SokobanFrame) {
+        player = frame.player
+        boxes = frame.boxes
+        steps = frame.steps
+        facing = frame.facing
+        won = frame.won
+        winCounts = frame.counts
     }
 
     /// 点到一格。先走不推箱子的最短路；没有这种路才沿直线推开挡路的箱子。走不到就完全不变。
@@ -161,13 +211,16 @@ final class SokobanModel {
         return directions.isEmpty ? nil : directions
     }
 
-    /// 人和箱子回到这一关的原位，步数归零。不改已经写下的纪录，也不换关。
+    /// 人和箱子回到这一关的原位，步数归零。不改已经写下的纪录，也不换关。这一关的撤销和重做都空。
     func restart() {
         boxes = initialBoxes
         player = initialPlayer
         steps = 0
         won = false
         facing = .down
+        winCounts = false
+        undoStack.removeAll()
+        redoStack.removeAll()
     }
 
     /// 打开编号对应的关。这一局丢掉，各关纪录保留。
@@ -186,6 +239,9 @@ final class SokobanModel {
         steps = 0
         won = false
         facing = .down
+        winCounts = false
+        undoStack.removeAll()
+        redoStack.removeAll()
         levelBest = SokobanRecords.best(level: clamped)
     }
 
@@ -208,6 +264,16 @@ final class SokobanModel {
     private func contains(_ point: GridPoint) -> Bool {
         point.row >= 0 && point.col >= 0 && point.row < rows && point.col < cols
     }
+}
+
+/// 走之前的局面。过关标记只说明这一帧是否已经过关，以及这次过关要不要参加纪录比较。
+private struct SokobanFrame {
+    var player: GridPoint
+    var boxes: Set<GridPoint>
+    var steps: Int
+    var facing: SokobanDirection
+    var won: Bool
+    var counts: Bool
 }
 
 extension GameID {

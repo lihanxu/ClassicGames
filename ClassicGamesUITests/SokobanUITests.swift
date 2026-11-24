@@ -260,6 +260,62 @@ final class SokobanUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 7")
     }
 
+    /// 撤销和重做各退回或前进一步。点地的每一格都能单独撤，过关后也能撤，纪录不改，换关撤不回去。
+    func testUndoAndRedoStayOnThisLevel() {
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        app.buttons["pad.down"].tap()
+        let oneStep = "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down"
+        XCTAssertEqual(board.value as? String, oneStep)
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "idle")
+        app.buttons["sokoban.redo"].tap()
+        XCTAssertEqual(board.value as? String, oneStep)
+        app.buttons["sokoban.undo"].tap()
+        app.buttons["pad.right"].tap()
+        let steppedAside = "level:1;player:3,3;boxes:3,1|4,3;steps:1;won:false;face:right"
+        XCTAssertEqual(board.value as? String, steppedAside)
+        app.buttons["sokoban.redo"].tap()
+        XCTAssertEqual(board.value as? String, steppedAside)
+
+        app.buttons["chrome.restart"].tap()
+        tapCell(board, row: 3, col: 4)
+        XCTAssertEqual(board.value as? String, "level:1;player:3,4;boxes:3,1|4,3;steps:2;won:false;face:right")
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(board.value as? String, steppedAside)
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        app.buttons["sokoban.redo"].tap()
+        XCTAssertEqual(board.value as? String, steppedAside)
+
+        app.buttons["chrome.restart"].tap()
+        app.buttons["pad.down"].tap()
+        app.buttons["chrome.restart"].tap()
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        play(SokobanMoves.short)
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 32")
+        XCTAssertFalse(app.staticTexts["sokoban.win"].exists)
+        XCTAssertFalse(app.buttons["sokoban.next"].exists)
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
+        app.buttons["sokoban.redo"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        app.buttons["sokoban.next"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+    }
+
     /// 顶墙、走出一格、推动一格各自留下时长。过关后的按键不再顶墙，重开清掉这段。
     func testWalkPushAndWallTransitions() {
         XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))

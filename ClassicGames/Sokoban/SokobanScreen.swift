@@ -45,6 +45,7 @@ struct SokobanScreen: View {
                 if model.won {
                     winRow
                 }
+                historyRow
                 SokobanPad(locked: model.won, onMove: move)
             }
             .padding(.horizontal, 16)
@@ -105,6 +106,46 @@ struct SokobanScreen: View {
                 .foregroundStyle(SokobanPalette.ink)
                 .accessibilityIdentifier("sokoban.level")
         }
+    }
+
+    /// 撤销和重做各一格。播放中的过渡直接丢掉，不排队。成功时立刻停在恢复后的局面。
+    private func undo() {
+        guard !motion.busy else { return }
+        guard model.undo() else { return }
+        motion.cancel()
+        audio.cancelPendingClear()
+    }
+
+    /// 把刚撤销的那一格放回来。没有可重做的步则画面不动。
+    private func redo() {
+        guard !motion.busy else { return }
+        guard model.redo() else { return }
+        motion.cancel()
+        audio.cancelPendingClear()
+    }
+
+    /// 棋盘下面的撤销和重做。提示和看解不在这一条。
+    private var historyRow: some View {
+        HStack(spacing: 8) {
+            historyButton("撤销", "sokoban.undo", undo)
+            historyButton("重做", "sokoban.redo", redo)
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// 和选关同一套按键样子。空栈时点下去局面不变。
+    private func historyButton(_ title: String, _ identifier: String, _ action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .buttonStyle(.plain)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(SokobanPalette.ink)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(SokobanPalette.key, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(SokobanPalette.wallEdge, lineWidth: 1.5)
+            }
+            .accessibilityIdentifier(identifier)
     }
 
     /// 过关后才能进下一关。最后一关没有下一关。
