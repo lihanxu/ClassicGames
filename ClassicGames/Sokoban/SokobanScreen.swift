@@ -8,6 +8,8 @@ struct SokobanScreen: View {
     @State private var showPicker = false
     /// 走、推、顶墙的过渡。重开和换关会把它打断。
     @State private var motion = SokobanMotion()
+    /// 棋盘放得下是 off。停在 28pt 仍超出时是 on，并带上双指平移的偏移。
+    @State private var panStatus = "off"
 
     var body: some View {
         GameFrame(
@@ -28,7 +30,7 @@ struct SokobanScreen: View {
                     .foregroundStyle(SokobanPalette.target)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("sokoban.best")
-                SokobanBoard(model: model, travel: motion.travel, progress: motion.progress, onMove: move)
+                SokobanBoard(model: model, travel: motion.travel, progress: motion.progress, onMove: move, onPanStatus: { panStatus = $0 })
                 if model.won {
                     winRow
                 }
@@ -38,13 +40,19 @@ struct SokobanScreen: View {
             .padding(.bottom, 12)
         }
         .background(alignment: .top) {
-            Text(verbatim: motion.label)
-                .font(.system(size: 1))
-                .foregroundStyle(SokobanPalette.ink.opacity(0.02))
-                .accessibilityIdentifier("sokoban.motion")
-                .accessibilityLabel(motion.label)
-                .accessibilityValue(motion.label)
-                .allowsHitTesting(false)
+            HStack(spacing: 4) {
+                Text(verbatim: motion.label)
+                    .accessibilityIdentifier("sokoban.motion")
+                    .accessibilityLabel(motion.label)
+                    .accessibilityValue(motion.label)
+                Text(verbatim: panStatus)
+                    .accessibilityIdentifier("sokoban.pan")
+                    .accessibilityLabel(panStatus)
+                    .accessibilityValue(panStatus)
+            }
+            .font(.system(size: 1))
+            .foregroundStyle(SokobanPalette.ink.opacity(0.02))
+            .allowsHitTesting(false)
         }
         .sheet(isPresented: $showPicker) {
             SokobanLevelPicker(current: model.levelNumber) { number in
@@ -338,27 +346,45 @@ struct SokobanTravel {
     var boxTo: GridPoint?
 }
 
-/// 用色块画出当前关。格子太小时可以滚动，避免人和箱子缩成一点。
+/// 用色块画出当前关。放得下就铺满；格子小到 28pt 仍放不下时，单指仍只走一格，双指才平移。
 struct SokobanBoard: View {
     var model: SokobanModel
     var travel: SokobanTravel?
     var progress: CGFloat
     var onMove: (SokobanDirection) -> Void
+    var onPanStatus: (String) -> Void
 
     /// 格子之间的缝。墙色从缝里露出来。
     private let gutter: CGFloat = 2
-    /// 再小就看不清人、箱子和地上的记号。
-    private let minimumCell: CGFloat = 36
+    /// 再小就停住。放不下的部分靠双指看，不再缩小。
+    private let minimumCell: CGFloat = 28
+    /// 双指平移。单指不改它。换关时回到左上角。
+    @State private var pan: CGSize = .zero
 
     var body: some View {
         GeometryReader { geo in
             let metrics = metrics(in: geo.size)
-            ScrollView([.horizontal, .vertical]) {
-                playableGrid(metrics)
-                    .frame(minWidth: geo.size.width, minHeight: geo.size.height)
-            }
-            .scrollDisabled(!metrics.scrolls)
-            .scrollBounceBehavior(.basedOnSize)
+            let status = panStatus(metrics)
+            grid(metrics)
+                .offset(metrics.scrolls ? pan : .zero)
+                .frame(width: geo.size.width, height: geo.size.height, alignment: metrics.scrolls ? .topLeading : .center)
+                .clipped()
+                .overlay {
+                    SokobanBoardTouch(
+                        panEnabled: metrics.scrolls,
+                        pan: pan,
+                        onMove: onMove,
+                        onPan: { proposed in
+                            pan = clamped(proposed, metrics, in: geo.size)
+                        }
+                    )
+                }
+                .onChange(of: model.levelNumber) { _, _ in
+                    pan = .zero
+                }
+                .task(id: status) {
+                    onPanStatus(status)
+                }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityIdentifier("sokoban.board")
@@ -366,7 +392,23 @@ struct SokobanBoard: View {
         .accessibilityValue(model.token)
     }
 
-    /// 能放下就放大到铺满，放不下就保持最小格子并滚动。
+    /// 模拟器核对平移。放得下是 off。停在 28pt 仍超出时是 on，后面是当前偏移。
+    private func panStatus(_ metrics: BoardMetrics) -> String {
+        guard metrics.scrolls else { return "off" }
+        return "on:\(Int(pan.width.rounded())):\(Int(pan.height.rounded()))"
+    }
+
+    /// 双指不能把棋盘拖出空白。左上是 0，往右下看是负数。
+    private func clamped(_ proposed: CGSize, _ metrics: BoardMetrics, in size: CGSize) -> CGSize {
+        let maxX = max(0, metrics.boardWidth - size.width)
+        let maxY = max(0, metrics.boardHeight - size.height)
+        return CGSize(
+            width: min(0, max(-maxX, proposed.width)),
+            height: min(0, max(-maxY, proposed.height))
+        )
+    }
+
+    /// 能放下就放大到铺满。降到 28pt 仍放不下就停住，多出来的部分用双指看。
     private func metrics(in size: CGSize) -> BoardMetrics {
         let cols = CGFloat(max(model.cols, 1))
         let rows = CGFloat(max(model.rows, 1))
@@ -379,16 +421,6 @@ struct SokobanBoard: View {
         let boardHeight = cell * rows + gutter * (rows - 1)
         let scrolls = boardWidth > size.width + 1 || boardHeight > size.height + 1
         return BoardMetrics(cell: cell, boardWidth: boardWidth, boardHeight: boardHeight, scrolls: scrolls)
-    }
-
-    /// 棋盘放得下时，滑动走一步。需要滚动时不抢手势。
-    @ViewBuilder
-    private func playableGrid(_ metrics: BoardMetrics) -> some View {
-        if metrics.scrolls {
-            grid(metrics)
-        } else {
-            grid(metrics).gesture(swipe)
-        }
     }
 
     /// 按格子尺寸把整张图排出来。过渡中的人和箱子画在格子上面，避免被旁边的格子盖住。
@@ -469,15 +501,90 @@ struct SokobanBoard: View {
         from + (to - from) * progress
     }
 
-    /// 在棋盘上滑动一步，和方向按钮走同一个方法。棋盘需要滚动时把滑动留给滚动。
-    private var swipe: some Gesture {
-        DragGesture(minimumDistance: 24).onEnded { value in
-            let dx = value.translation.width
-            let dy = value.translation.height
-            if abs(dx) > abs(dy) {
-                onMove(dx > 0 ? .right : .left)
-            } else {
-                onMove(dy > 0 ? .down : .up)
+}
+
+/// 棋盘上的手指。单指先到 24pt 的那一轴走一格；双指只在图超出时平移。
+private struct SokobanBoardTouch: UIViewRepresentable {
+    var panEnabled: Bool
+    var pan: CGSize
+    var onMove: (SokobanDirection) -> Void
+    var onPan: (CGSize) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        view.isMultipleTouchEnabled = true
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        let one = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.oneFinger(_:)))
+        one.minimumNumberOfTouches = 1
+        one.maximumNumberOfTouches = 1
+        let two = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.twoFinger(_:)))
+        two.minimumNumberOfTouches = 2
+        two.maximumNumberOfTouches = 2
+        view.addGestureRecognizer(one)
+        view.addGestureRecognizer(two)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.panEnabled = panEnabled
+        context.coordinator.pan = pan
+        context.coordinator.onMove = onMove
+        context.coordinator.onPan = onPan
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    /// 记下这一下手指有没有越过 24pt，以及双指开始时棋盘的位置。
+    final class Coordinator: NSObject {
+        var panEnabled = false
+        var pan: CGSize = .zero
+        var onMove: (SokobanDirection) -> Void = { _ in }
+        var onPan: (CGSize) -> Void = { _ in }
+        private var locked: SokobanDirection?
+        private var origin: CGSize = .zero
+
+        /// 单指。先到 24pt 的轴在松手时走一格。中途多了一根手指就不算滑动。
+        @objc func oneFinger(_ gesture: UIPanGestureRecognizer) {
+            if gesture.numberOfTouches > 1 {
+                locked = nil
+                return
+            }
+            let translation = gesture.translation(in: gesture.view)
+            switch gesture.state {
+            case .began, .changed:
+                guard locked == nil else { return }
+                // 同一采样里两轴都过了 24pt 时，取绝对值更大的那一轴。
+                if abs(translation.x) >= 24, abs(translation.x) >= abs(translation.y) {
+                    locked = translation.x > 0 ? .right : .left
+                } else if abs(translation.y) >= 24 {
+                    locked = translation.y > 0 ? .down : .up
+                }
+            case .ended:
+                if let locked {
+                    onMove(locked)
+                }
+                locked = nil
+            case .cancelled, .failed:
+                locked = nil
+            default:
+                break
+            }
+        }
+
+        /// 双指只平移。格子还没被 28pt 卡住时不改位置，也不走步。
+        @objc func twoFinger(_ gesture: UIPanGestureRecognizer) {
+            guard panEnabled else { return }
+            let translation = gesture.translation(in: gesture.view)
+            switch gesture.state {
+            case .began:
+                origin = pan
+            case .changed, .ended:
+                onPan(CGSize(width: origin.width + translation.x, height: origin.height + translation.y))
+            default:
+                break
             }
         }
     }

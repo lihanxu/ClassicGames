@@ -166,6 +166,45 @@ final class SokobanUITests: XCTestCase {
         XCTAssertEqual(board.value as? String, SokobanMoves.level20)
     }
 
+    /// 单指滑动只走一格，短拖不动。大图停在 28pt，单指也不平移棋盘。
+    func testSwipeMovesOneCellWithoutScrolling() {
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "off")
+
+        let center = board.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 12, dy: 0)))
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "off")
+
+        center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 0, dy: 80)))
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "walk:140")
+        XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "off")
+
+        app.buttons["sokoban.levels"].tap()
+        let level99 = app.buttons["sokoban.pick.99"]
+        var swipes = 0
+        while !level99.isHittable && swipes < 8 {
+            app.swipeUp()
+            swipes += 1
+        }
+        XCTAssertTrue(level99.isHittable)
+        level99.tap()
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        XCTAssertTrue((board.value as? String)?.hasPrefix("level:99;") == true)
+        XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "on:0:0")
+
+        let before = board.value as? String
+        board.swipeLeft()
+        let after = board.value as? String
+        XCTAssertNotEqual(before, nil)
+        XCTAssertTrue(after == before || stepsAdvanced(from: before, to: after))
+        XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "on:0:0")
+    }
+
     /// 顶墙、走出一格、推动一格各自留下时长。过关后的按键不再顶墙，重开清掉这段。
     func testWalkPushAndWallTransitions() {
         XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
@@ -394,6 +433,17 @@ final class SokobanUITests: XCTestCase {
             }
         }
         return fields
+    }
+
+    /// 大图上单指滑动最多让步数加 1，不能连走，也不能换关。
+    private func stepsAdvanced(from before: String?, to after: String?) -> Bool {
+        guard let before, let after else { return false }
+        let oldFields = audioFields(before)
+        let newFields = audioFields(after)
+        guard oldFields["level"] == newFields["level"],
+              let oldSteps = oldFields["steps"].flatMap(Int.init),
+              let newSteps = newFields["steps"].flatMap(Int.init) else { return false }
+        return newSteps == oldSteps + 1
     }
 
     /// 方向键按顺序点。每一步都进同一个移动方法。
