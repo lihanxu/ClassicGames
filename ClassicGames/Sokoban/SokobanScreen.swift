@@ -36,6 +36,7 @@ struct SokobanScreen: View {
                     model: model,
                     travel: motion.travel,
                     progress: motion.progress,
+                    playbackBoxes: motion.playbackBoxes,
                     onMove: move,
                     onTap: tapFloor,
                     onPanStatus: { panStatus = $0 },
@@ -172,18 +173,48 @@ struct SokobanScreen: View {
         model.advance()
     }
 
-    /// 点空地或空目标。模型直接停在终局，沿路径的过渡留到下一条。
+    /// 点空地或空目标。模型先到终局，画面再按每一格的走或推滑过去，格与格之间不空档。
     private func tapFloor(_ point: GridPoint) {
         guard !motion.busy else { return }
+        let playerBefore = model.player
+        let boxesBefore = model.boxes
+        let stepsBefore = model.steps
         let wonBefore = model.won
         let taken = model.walkTo(point)
         guard !taken.isEmpty else { return }
-        for step in taken where !step.pushed {
-            audio.playFootstep()
+        var player = playerBefore
+        var boxes = boxesBefore
+        var cells: [SokobanPathCell] = []
+        for step in taken {
+            let next = player.moving(step.direction)
+            let boxFrom = step.pushed ? next : nil
+            let boxTo = step.pushed ? next.moving(step.direction) : nil
+            cells.append(SokobanPathCell(
+                travel: SokobanTravel(
+                    kind: step.pushed ? .push : .walk,
+                    direction: step.direction,
+                    from: player,
+                    to: next,
+                    boxFrom: boxFrom,
+                    boxTo: boxTo
+                ),
+                boxes: boxes
+            ))
+            if let boxFrom, let boxTo {
+                boxes.remove(boxFrom)
+                boxes.insert(boxTo)
+            }
+            player = next
+        }
+        let totalMilliseconds = cells.reduce(0) { $0 + $1.travel.kind.milliseconds }
+        motion.playPath(cells, stepsAtStart: stepsBefore) { travel in
+            if travel.kind == .walk {
+                audio.playFootstep()
+            }
         }
         if !wonBefore && model.won {
             scores.recordLower(.sokoban, score: model.steps)
-            audio.playClear(afterMilliseconds: taken.last?.pushed == true ? 180 : 140)
+            audio.playClear(afterMilliseconds: totalMilliseconds)
         }
     }
 
@@ -297,6 +328,8 @@ struct SokobanLevelPicker: View {
 final class SokobanMotion {
     private(set) var travel: SokobanTravel?
     private(set) var progress: CGFloat = 1
+    /// 沿路径播放时，箱子先停在这一格开始时的位置。空则用模型里的终局。
+    private(set) var playbackBoxes: Set<GridPoint>?
     /// 过渡播完之前，画面步数停在出发的那一格。顶墙不改步数，这里保持空。
     private(set) var shownSteps: Int?
     /// 为真时新的走和推直接丢掉，不排队。
@@ -307,9 +340,11 @@ final class SokobanMotion {
 
     /// 开始这一格。检查关掉动画时不占住输入，画面直接停在终局。
     func start(_ travel: SokobanTravel, stepsOnScreen: Int? = nil) {
-        label = travel.kind.label
-        guard UIView.areAnimationsEnabled else { return }
+        generation += 1
         let token = generation
+        label = travel.kind.label
+        playbackBoxes = nil
+        guard UIView.areAnimationsEnabled else { return }
         busy = true
         shownSteps = stepsOnScreen
         self.travel = travel
@@ -322,23 +357,72 @@ final class SokobanMotion {
                 self.progress = 1
             } completion: {
                 guard token == self.generation else { return }
-                self.travel = nil
-                self.progress = 1
-                self.busy = false
-                self.shownSteps = nil
+                self.finish()
             }
         }
+    }
+
+    /// 按顺序播放点地或看解的每一格。格与格之间不再加时间。检查关掉动画时只记下每一格的时长。
+    func playPath(_ cells: [SokobanPathCell], stepsAtStart: Int, onCell: @escaping (SokobanTravel) -> Void) {
+        generation += 1
+        let token = generation
+        label = "path:" + cells.map(\.travel.kind.label).joined(separator: "+")
+        guard UIView.areAnimationsEnabled else {
+            for cell in cells {
+                onCell(cell.travel)
+            }
+            return
+        }
+        busy = true
+        show(0, cells, stepsAtStart: stepsAtStart, token: token, onCell: onCell)
     }
 
     /// 立刻停在模型现在的局面。晚到的完成回调不再改画面。
     func cancel() {
         generation += 1
-        travel = nil
-        progress = 1
-        busy = false
-        shownSteps = nil
+        finish()
         label = "idle"
     }
+
+    /// 画出路径里的第 index 格，播完立刻接下一格。
+    private func show(_ index: Int, _ cells: [SokobanPathCell], stepsAtStart: Int, token: Int, onCell: @escaping (SokobanTravel) -> Void) {
+        guard token == generation, cells.indices.contains(index) else {
+            finish()
+            return
+        }
+        let cell = cells[index]
+        shownSteps = stepsAtStart + index
+        playbackBoxes = cell.boxes
+        travel = cell.travel
+        progress = 0
+        onCell(cell.travel)
+        let seconds = cell.travel.kind.seconds
+        Task { @MainActor in
+            await Task.yield()
+            guard token == self.generation else { return }
+            withAnimation(.linear(duration: seconds)) {
+                self.progress = 1
+            } completion: {
+                guard token == self.generation else { return }
+                self.show(index + 1, cells, stepsAtStart: stepsAtStart, token: token, onCell: onCell)
+            }
+        }
+    }
+
+    /// 过渡结束或被打断。步数和箱子回到模型的终局。
+    private func finish() {
+        travel = nil
+        progress = 1
+        playbackBoxes = nil
+        busy = false
+        shownSteps = nil
+    }
+}
+
+/// 路径上的一格。箱子位置是这一格开始滑之前的局面。
+struct SokobanPathCell {
+    var travel: SokobanTravel
+    var boxes: Set<GridPoint>
 }
 
 /// 正在播放的一格。人和被推的箱子从原格滑到终局，模型本身不再等这段。
@@ -354,6 +438,15 @@ struct SokobanTravel {
             case .walk: "walk:140"
             case .push: "push:180"
             case .bump: "bump:120"
+            }
+        }
+
+        /// 和 label 里的数字相同，给过关短乐把整段加起来。
+        var milliseconds: Int {
+            switch self {
+            case .walk: 140
+            case .push: 180
+            case .bump: 120
             }
         }
 
@@ -380,6 +473,8 @@ struct SokobanBoard: View {
     var model: SokobanModel
     var travel: SokobanTravel?
     var progress: CGFloat
+    /// 沿路径播放时用这一格开始时的箱子。空则画模型终局。
+    var playbackBoxes: Set<GridPoint>?
     var onMove: (SokobanDirection) -> Void
     var onTap: (GridPoint) -> Void
     var onPanStatus: (String) -> Void
@@ -508,13 +603,26 @@ struct SokobanBoard: View {
             if model.targets.contains(point) {
                 SokobanTargetMark()
             }
-            if model.boxes.contains(point), travel?.boxTo != point {
+            if drawnBoxes.contains(point), !hidesMovingBox(at: point) {
                 SokobanCrate()
             }
             if model.player == point, travel == nil {
                 SokobanPerson(facing: model.facing)
             }
         }
+    }
+
+    /// 这一格要画的箱子。路径播放用滑之前的位置，单步过渡用模型终局。
+    private var drawnBoxes: Set<GridPoint> {
+        playbackBoxes ?? model.boxes
+    }
+
+    /// 正在滑的箱子不留在格子里，改由浮层从原格画到新格。
+    private func hidesMovingBox(at point: GridPoint) -> Bool {
+        if playbackBoxes != nil {
+            return point == travel?.boxFrom || point == travel?.boxTo
+        }
+        return point == travel?.boxTo
     }
 
     /// 人和被推的箱子沿这一格移动。顶墙只移出 0.2 格再回来。
@@ -526,7 +634,7 @@ struct SokobanBoard: View {
                     .frame(width: metrics.cell, height: metrics.cell)
                     .offset(pieceOffset(slide(travel, from: boxFrom, to: boxTo), metrics))
             }
-            SokobanPerson(facing: model.facing)
+            SokobanPerson(facing: travel.kind == .bump ? model.facing : travel.direction)
                 .frame(width: metrics.cell, height: metrics.cell)
                 .offset(pieceOffset(slide(travel, from: travel.from, to: travel.to), metrics))
         }

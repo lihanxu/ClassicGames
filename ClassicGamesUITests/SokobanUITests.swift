@@ -234,6 +234,32 @@ final class SokobanUITests: XCTestCase {
         XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:7;won:false;face:down")
     }
 
+    /// 点地之后每一格都留下自己的走或推时长，中间不再加一段。模型已经停在终局。
+    func testPathPlaysEachCell() {
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+
+        tapCell(board, row: 4, col: 2)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "path:walk:140")
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 1")
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+
+        app.buttons["chrome.restart"].tap()
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "idle")
+        tapCell(board, row: 3, col: 4)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "path:walk:140+walk:140")
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 2")
+
+        tapCell(board, row: 4, col: 4)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "path:walk:140")
+        tapCell(board, row: 4, col: 2)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "path:walk:140+walk:140+walk:140+walk:140")
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:7;won:false;face:down")
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 7")
+    }
+
     /// 顶墙、走出一格、推动一格各自留下时长。过关后的按键不再顶墙，重开清掉这段。
     func testWalkPushAndWallTransitions() {
         XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))

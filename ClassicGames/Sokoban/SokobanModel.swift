@@ -79,7 +79,7 @@ final class SokobanModel {
     }
 
     /// 点到一格。先走不推箱子的最短路；没有这种路才沿直线推开挡路的箱子。走不到就完全不变。
-    /// 这一步只改模型，画面可以先停在终局；沿路径一格格滑是后面的过渡。
+    /// 返回的每一格给画面接着播，模型在返回前已经停在终局。
     func walkTo(_ target: GridPoint) -> [SokobanStep] {
         guard !won else { return [] }
         guard contains(target), !walls.contains(target), !boxes.contains(target), target != player else { return [] }
