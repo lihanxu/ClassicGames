@@ -99,4 +99,13 @@ enum SokobanDirection {
         case .right: "right"
         }
     }
+
+    /// 相邻两格的方向。不是正好一格时返回空。
+    static func between(_ from: GridPoint, _ to: GridPoint) -> SokobanDirection? {
+        if to.row == from.row - 1, to.col == from.col { return .up }
+        if to.row == from.row + 1, to.col == from.col { return .down }
+        if to.row == from.row, to.col == from.col - 1 { return .left }
+        if to.row == from.row, to.col == from.col + 1 { return .right }
+        return nil
+    }
 }

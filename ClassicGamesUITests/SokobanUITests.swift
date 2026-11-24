@@ -323,6 +323,59 @@ final class SokobanUITests: XCTestCase {
         XCTAssertEqual(board.value as? String, SokobanMoves.level2)
     }
 
+    /// 提示和看解只改当前关。没有解串时局面不变。看解的过关不写纪录。
+    func testHintAndSolutionStayOnThisLevel() {
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "")
+
+        app.buttons["sokoban.hint"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "walk:140")
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "")
+
+        app.buttons["pad.up"].tap()
+        let diverged = board.value as? String
+        app.buttons["sokoban.hint"].tap()
+        XCTAssertEqual(board.value as? String, diverged)
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "已偏离解法")
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "")
+
+        app.buttons["sokoban.levels"].tap()
+        let level2 = app.buttons["sokoban.pick.2"]
+        XCTAssertTrue(level2.waitForExistence(timeout: 5))
+        level2.tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        app.buttons["sokoban.hint"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "这一关没有解")
+        app.buttons["sokoban.solution"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "这一关没有解")
+
+        app.buttons["sokoban.levels"].tap()
+        let level1 = app.buttons["sokoban.pick.1"]
+        XCTAssertTrue(level1.waitForExistence(timeout: 5))
+        level1.tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "")
+        app.buttons["sokoban.solution"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 —")
+        XCTAssertEqual(app.staticTexts["chrome.best"].label, "最高纪录 —")
+        XCTAssertEqual(app.staticTexts["sokoban.notice"].label, "")
+        let motion = app.staticTexts["sokoban.motion"].label
+        XCTAssertTrue(motion.hasPrefix("path:"))
+        XCTAssertEqual(motion.split(separator: "+").count, 33)
+        app.buttons["sokoban.undo"].tap()
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 32")
+        XCTAssertFalse(app.staticTexts["sokoban.win"].exists)
+        XCTAssertTrue((board.value as? String)?.contains("level:1;") == true)
+    }
+
     /// 返回首页或杀掉再打开，还停在这一关这一步，撤销栈也在。恢复不改纪录。
     func testResumeKeepsThisStep() {
         XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))

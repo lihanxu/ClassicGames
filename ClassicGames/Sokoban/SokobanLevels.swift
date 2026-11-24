@@ -1021,3 +1021,27 @@ enum SokobanLevels {
         """,
     ]
 }
+
+/// 官方解。一关一条，字符只含「上下左右」。没有这一关时提示和看解都不改局面。
+enum SokobanSolutions {
+    /// 解成方向。空串或夹了别的字就当作没有解。
+    static func directions(level: Int) -> [SokobanDirection]? {
+        guard let text = texts[level], !text.isEmpty else { return nil }
+        var directions: [SokobanDirection] = []
+        for character in text {
+            switch character {
+            case "上": directions.append(.up)
+            case "下": directions.append(.down)
+            case "左": directions.append(.left)
+            case "右": directions.append(.right)
+            default: return nil
+            }
+        }
+        return directions
+    }
+
+    /// 只收已经核对过的关。其余关先空着。
+    private static let texts: [Int: String] = [
+        1: "下左上右右右下左上左左下下右上左上右上上左下右下下右右上左下左上上"
+    ]
+}

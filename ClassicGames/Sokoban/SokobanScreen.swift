@@ -19,8 +19,8 @@ struct SokobanScreen: View {
             title: "推箱子",
             score: scoreOnScreen,
             scorePrefix: "步数",
-            // 步数还停在上一格时，先不把这一局交给外框，避免用少 1 的步数写纪录。
-            isOver: model.won && motion.shownSteps == nil,
+            // 步数还停在上一格时，先不把这一局交给外框，避免用少 1 的步数写纪录。看解的过关不参加比较。
+            isOver: model.won && model.winCounts && motion.shownSteps == nil,
             banner: nil,
             rule: .lowerOnClear,
             onRestart: restart
@@ -45,6 +45,11 @@ struct SokobanScreen: View {
                 if model.won {
                     winRow
                 }
+                Text(verbatim: model.notice)
+                    .font(.subheadline)
+                    .foregroundStyle(SokobanPalette.target)
+                    .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+                    .accessibilityIdentifier("sokoban.notice")
                 historyRow
                 SokobanPad(locked: model.won, onMove: move)
             }
@@ -124,11 +129,13 @@ struct SokobanScreen: View {
         audio.cancelPendingClear()
     }
 
-    /// 棋盘下面的撤销和重做。提示和看解不在这一条。
+    /// 撤销、重做、提示和看解。播放中的过渡直接丢掉，不排队。
     private var historyRow: some View {
         HStack(spacing: 8) {
             historyButton("撤销", "sokoban.undo", undo)
             historyButton("重做", "sokoban.redo", redo)
+            historyButton("提示", "sokoban.hint", hint)
+            historyButton("看解", "sokoban.solution", showSolution)
             Spacer(minLength: 0)
         }
     }
@@ -223,10 +230,52 @@ struct SokobanScreen: View {
         let wonBefore = model.won
         let taken = model.walkTo(point)
         guard !taken.isEmpty else { return }
-        var player = playerBefore
-        var boxes = boxesBefore
+        play(
+            SokobanPlayback(steps: taken, player: playerBefore, boxes: boxesBefore, stepsAtStart: stepsBefore),
+            wonBefore: wonBefore,
+            recordWin: true
+        )
+    }
+
+    /// 提示只走官方解的下一格，用单格的走或推，不接成路径。
+    private func hint() {
+        guard !motion.busy else { return }
+        let playerBefore = model.player
+        let boxesBefore = model.boxes
+        let stepsBefore = model.steps
+        let wonBefore = model.won
+        guard let step = model.hint() else { return }
+        if !step.pushed {
+            audio.playFootstep()
+        }
+        if !wonBefore && model.won {
+            scores.recordLower(.sokoban, score: model.steps)
+            audio.playClear(afterMilliseconds: step.pushed ? 180 : 140)
+        }
+        motion.start(SokobanTravel(
+            kind: step.pushed ? .push : .walk,
+            direction: step.direction,
+            from: playerBefore,
+            to: model.player,
+            boxFrom: step.pushed ? model.player : nil,
+            boxTo: step.pushed ? model.player.moving(step.direction) : nil
+        ), stepsOnScreen: stepsBefore)
+    }
+
+    /// 看解从这一关开局沿路径播放。这次过关不写纪录。
+    private func showSolution() {
+        guard !motion.busy else { return }
+        let playback = model.showSolution()
+        guard !playback.steps.isEmpty else { return }
+        play(playback, wonBefore: false, recordWin: false)
+    }
+
+    /// 按已经写入的步骤播放。格与格之间不再加时间。
+    private func play(_ playback: SokobanPlayback, wonBefore: Bool, recordWin: Bool) {
+        var player = playback.player
+        var boxes = playback.boxes
         var cells: [SokobanPathCell] = []
-        for step in taken {
+        for step in playback.steps {
             let next = player.moving(step.direction)
             let boxFrom = step.pushed ? next : nil
             let boxTo = step.pushed ? next.moving(step.direction) : nil
@@ -248,13 +297,15 @@ struct SokobanScreen: View {
             player = next
         }
         let totalMilliseconds = cells.reduce(0) { $0 + $1.travel.kind.milliseconds }
-        motion.playPath(cells, stepsAtStart: stepsBefore) { travel in
+        motion.playPath(cells, stepsAtStart: playback.stepsAtStart) { travel in
             if travel.kind == .walk {
                 audio.playFootstep()
             }
         }
-        if !wonBefore && model.won {
+        if recordWin, !wonBefore, model.won {
             scores.recordLower(.sokoban, score: model.steps)
+        }
+        if !wonBefore, model.won {
             audio.playClear(afterMilliseconds: totalMilliseconds)
         }
     }

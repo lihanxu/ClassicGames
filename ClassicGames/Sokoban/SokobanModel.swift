@@ -51,6 +51,8 @@ final class SokobanModel {
     private(set) var facing: SokobanDirection = .down
     /// 这次过关是否写入纪录。正式的一步才算；看解造成的过关不算。
     private(set) var winCounts = false
+    /// 提示行。没有提示时是空字符串。
+    private(set) var notice = ""
 
     private var initialBoxes: Set<GridPoint> = []
     private var initialPlayer = GridPoint(row: 0, col: 0)
@@ -96,6 +98,7 @@ final class SokobanModel {
         redoStack.append(currentFrame)
         restore(previous)
         persist()
+        notice = ""
         return true
     }
 
@@ -106,6 +109,7 @@ final class SokobanModel {
         undoStack.append(currentFrame)
         restore(next)
         persist()
+        notice = ""
         return true
     }
 
@@ -136,7 +140,71 @@ final class SokobanModel {
             }
         }
         persist()
+        notice = ""
         return true
+    }
+
+    /// 按官方解走出下一步。没有解、已经偏离或这一步走不通时，局面不变。
+    func hint() -> SokobanStep? {
+        guard let solution = SokobanSolutions.directions(level: levelNumber) else {
+            notice = "这一关没有解"
+            return nil
+        }
+        guard !won else { return nil }
+        guard let taken = historyDirections(), solution.starts(with: taken), taken.count < solution.count else {
+            notice = takenCountIsPrefix(of: solution) ? "这一步没有提示" : "已偏离解法"
+            return nil
+        }
+        let direction = solution[taken.count]
+        let boxesBefore = boxes
+        guard step(direction, countsOnWin: true) else {
+            notice = "这一步没有提示"
+            return nil
+        }
+        return SokobanStep(direction: direction, pushed: boxes != boxesBefore)
+    }
+
+    /// 回到这一关开局再逐格走出官方解。没有解串时局面不变。看解的过关不写纪录。
+    func showSolution() -> SokobanPlayback {
+        guard let solution = SokobanSolutions.directions(level: levelNumber) else {
+            notice = "这一关没有解"
+            return SokobanPlayback(steps: [], player: player, boxes: boxes, stepsAtStart: steps)
+        }
+        restart()
+        let originPlayer = player
+        let originBoxes = boxes
+        var taken: [SokobanStep] = []
+        for direction in solution {
+            if won { break }
+            let boxesBefore = boxes
+            guard step(direction, countsOnWin: false) else {
+                notice = "解法走不通"
+                return SokobanPlayback(steps: taken, player: originPlayer, boxes: originBoxes, stepsAtStart: 0)
+            }
+            taken.append(SokobanStep(direction: direction, pushed: boxes != boxesBefore))
+        }
+        if !won {
+            notice = "解法没有过关"
+        }
+        return SokobanPlayback(steps: taken, player: originPlayer, boxes: originBoxes, stepsAtStart: 0)
+    }
+
+    /// 已经走出的方向。有一格对不上相邻方向，就当作偏离。
+    private func historyDirections() -> [SokobanDirection]? {
+        let players = undoStack.map(\.player) + [player]
+        guard players.count >= 2 else { return [] }
+        var directions: [SokobanDirection] = []
+        for pair in zip(players, players.dropFirst()) {
+            guard let direction = SokobanDirection.between(pair.0, pair.1) else { return nil }
+            directions.append(direction)
+        }
+        return directions
+    }
+
+    /// 当前步数还落在解的前缀上，只是没有下一步可走。
+    private func takenCountIsPrefix(of solution: [SokobanDirection]) -> Bool {
+        guard let taken = historyDirections() else { return false }
+        return solution.starts(with: taken)
     }
 
     /// 走之前的一帧。撤销和重做只换这帧，不写纪录。
@@ -247,6 +315,7 @@ final class SokobanModel {
         winCounts = false
         undoStack.removeAll()
         redoStack.removeAll()
+        notice = ""
         persist()
     }
 
@@ -274,6 +343,7 @@ final class SokobanModel {
         winCounts = false
         undoStack.removeAll()
         redoStack.removeAll()
+        notice = ""
         levelBest = SokobanRecords.best(level: clamped)
         if shouldPersist {
             persist()
@@ -363,6 +433,14 @@ extension GameID {
 struct SokobanStep {
     var direction: SokobanDirection
     var pushed: Bool
+}
+
+/// 已经写入模型的一串步骤，以及播放前的起点。看解从这一关开局播。
+struct SokobanPlayback {
+    var steps: [SokobanStep]
+    var player: GridPoint
+    var boxes: Set<GridPoint>
+    var stepsAtStart: Int
 }
 
 extension Array where Element == SokobanDirection {
