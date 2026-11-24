@@ -69,6 +69,24 @@ enum SokobanDirection {
     case left
     case right
 
+    /// 行变化。上是 -1，下是 1。顶墙偏移用它，不检查墙。
+    var rowDelta: Int {
+        switch self {
+        case .up: -1
+        case .down: 1
+        case .left, .right: 0
+        }
+    }
+
+    /// 列变化。左是 -1，右是 1。
+    var colDelta: Int {
+        switch self {
+        case .left: -1
+        case .right: 1
+        case .up, .down: 0
+        }
+    }
+
     /// 棋盘摘要里的朝向。和按钮名字分开，避免和中文文案绑死。
     var name: String {
         switch self {

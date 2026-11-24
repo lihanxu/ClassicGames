@@ -61,6 +61,12 @@ final class SokobanAudio {
         stepCount += 1
     }
 
+    /// 重开、选关或下一关打断还没播完的过渡时，过关短乐不响。已经在响的这一声不停。
+    func cancelPendingClear() {
+        clearTask?.cancel()
+        clearTask = nil
+    }
+
     /// 过关短乐。`delayMilliseconds` 是造成过关的那一格过渡，走是 140，推是 180。
     func playClear(afterMilliseconds delayMilliseconds: Int) {
         guard inGame else { return }

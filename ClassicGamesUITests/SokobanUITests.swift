@@ -166,6 +166,46 @@ final class SokobanUITests: XCTestCase {
         XCTAssertEqual(board.value as? String, SokobanMoves.level20)
     }
 
+    /// 顶墙、走出一格、推动一格各自留下时长。过关后的按键不再顶墙，重开清掉这段。
+    func testWalkPushAndWallTransitions() {
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "idle")
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        app.buttons["pad.left"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 0")
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "bump:120")
+
+        app.buttons["pad.down"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 1")
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "walk:140")
+
+        app.buttons["pad.right"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,3;boxes:3,1|4,4;steps:2;won:false;face:right")
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 2")
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "push:180")
+
+        app.buttons["chrome.restart"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "idle")
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 0")
+
+        play(SokobanMoves.short)
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 33")
+        let settled = app.staticTexts["sokoban.motion"].label
+        XCTAssertTrue(settled == "walk:140" || settled == "push:180")
+        let locked = board.value as? String
+        play(["pad.left", "pad.right", "pad.up", "pad.down"])
+        XCTAssertEqual(board.value as? String, locked)
+        XCTAssertEqual(app.staticTexts["sokoban.motion"].label, settled)
+    }
+
     /// 选关能看出已过和五组难度。当前关描边还在，点编号仍进入该关开局。
     func testClearedMarksAndDifficultyGroups() {
         XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))

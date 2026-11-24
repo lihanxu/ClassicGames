@@ -3,19 +3,23 @@ import SwiftUI
 /// 推箱子这一局。外框负责返回和总纪录，这里画关卡、棋盘和选关。
 struct SokobanScreen: View {
     @Environment(SokobanAudio.self) private var audio
+    @Environment(ScoreStore.self) private var scores
     @State private var model = SokobanModel()
     @State private var showPicker = false
+    /// 走、推、顶墙的过渡。重开和换关会把它打断。
+    @State private var motion = SokobanMotion()
 
     var body: some View {
         GameFrame(
             id: .sokoban,
             title: "推箱子",
-            score: model.steps,
+            score: scoreOnScreen,
             scorePrefix: "步数",
-            isOver: model.won,
+            // 步数还停在上一格时，先不把这一局交给外框，避免用少 1 的步数写纪录。
+            isOver: model.won && motion.shownSteps == nil,
             banner: nil,
             rule: .lowerOnClear,
-            onRestart: model.restart
+            onRestart: restart
         ) {
             VStack(spacing: 12) {
                 levelBar
@@ -24,7 +28,7 @@ struct SokobanScreen: View {
                     .foregroundStyle(SokobanPalette.target)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("sokoban.best")
-                SokobanBoard(model: model, onMove: move)
+                SokobanBoard(model: model, travel: motion.travel, progress: motion.progress, onMove: move)
                 if model.won {
                     winRow
                 }
@@ -33,12 +37,28 @@ struct SokobanScreen: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 12)
         }
+        .background(alignment: .top) {
+            Text(verbatim: motion.label)
+                .font(.system(size: 1))
+                .foregroundStyle(SokobanPalette.ink.opacity(0.02))
+                .accessibilityIdentifier("sokoban.motion")
+                .accessibilityLabel(motion.label)
+                .accessibilityValue(motion.label)
+                .allowsHitTesting(false)
+        }
         .sheet(isPresented: $showPicker) {
             SokobanLevelPicker(current: model.levelNumber) { number in
+                motion.cancel()
+                audio.cancelPendingClear()
                 model.load(number)
                 showPicker = false
             }
         }
+    }
+
+    /// 画面上的步数。过渡播完之前停在出发格，模型和外框用的是终局。
+    private var scoreOnScreen: Int {
+        motion.shownSteps ?? model.steps
     }
 
     /// 当前关号和选关入口。选关的值是关卡总数，给模拟器核对用。
@@ -69,7 +89,7 @@ struct SokobanScreen: View {
         HStack(spacing: 12) {
             SokobanWinMark()
             if model.levelNumber < SokobanLevels.count {
-                Button("下一关") { model.advance() }
+                Button("下一关") { advance() }
                     .buttonStyle(.plain)
                     .font(.title3.bold())
                     .foregroundStyle(.white)
@@ -81,20 +101,53 @@ struct SokobanScreen: View {
         }
     }
 
-    /// 按这一步的结果发声。步数没加就是顶墙或推不动，不响。人动而箱子没动才有脚步。过关短乐等这一格过渡结束：走出一格 140 毫秒，推动一格 180 毫秒。
+    /// 按这一步的结果发声并播放过渡。过渡还在播就丢掉，不排队。步数没加是顶墙或推不动，不响。人动而箱子没动才有脚步。过关短乐等这一格过渡结束。
     private func move(_ direction: SokobanDirection) {
+        guard !motion.busy else { return }
         let stepsBefore = model.steps
         let boxesBefore = model.boxes
+        let playerBefore = model.player
         let wonBefore = model.won
         model.move(direction)
-        guard model.steps > stepsBefore else { return }
+        if model.steps == stepsBefore {
+            // 过关之后的按键不顶墙。局面没变才是顶墙或推不动。
+            guard !wonBefore else { return }
+            motion.start(SokobanTravel(kind: .bump, direction: direction, from: playerBefore, to: playerBefore))
+            return
+        }
         let pushed = model.boxes != boxesBefore
         if !pushed {
             audio.playFootstep()
         }
         if !wonBefore && model.won {
+            // 外框要等画面步数追上才记。这里先把终局步数交出去，重开打断过渡也不会少记。
+            scores.recordLower(.sokoban, score: model.steps)
             audio.playClear(afterMilliseconds: pushed ? 180 : 140)
         }
+        let boxFrom = pushed ? model.player : nil
+        let boxTo = pushed ? model.player.moving(direction) : nil
+        motion.start(SokobanTravel(
+            kind: pushed ? .push : .walk,
+            direction: direction,
+            from: playerBefore,
+            to: model.player,
+            boxFrom: boxFrom,
+            boxTo: boxTo
+        ), stepsOnScreen: stepsBefore)
+    }
+
+    /// 重新开始立刻停在这一关开局，没播完的格子不再滑。
+    private func restart() {
+        motion.cancel()
+        audio.cancelPendingClear()
+        model.restart()
+    }
+
+    /// 下一关立刻进入开局。还没过关时模型自己不动。
+    private func advance() {
+        motion.cancel()
+        audio.cancelPendingClear()
+        model.advance()
     }
 
     /// 这一关自己的最少步数。没有过关时是「—」。
@@ -201,9 +254,95 @@ struct SokobanLevelPicker: View {
     }
 }
 
+/// 走、推和顶墙的画面。模型先到终局，这里只负责滑过去；重开和换关会作废还没播完的一段。
+@MainActor
+@Observable
+final class SokobanMotion {
+    private(set) var travel: SokobanTravel?
+    private(set) var progress: CGFloat = 1
+    /// 过渡播完之前，画面步数停在出发的那一格。顶墙不改步数，这里保持空。
+    private(set) var shownSteps: Int?
+    /// 为真时新的走和推直接丢掉，不排队。
+    private(set) var busy = false
+    /// 最近一次过渡。检查关掉动画时也留下种类和时长。
+    private(set) var label = "idle"
+    private var generation = 0
+
+    /// 开始这一格。检查关掉动画时不占住输入，画面直接停在终局。
+    func start(_ travel: SokobanTravel, stepsOnScreen: Int? = nil) {
+        label = travel.kind.label
+        guard UIView.areAnimationsEnabled else { return }
+        let token = generation
+        busy = true
+        shownSteps = stepsOnScreen
+        self.travel = travel
+        progress = 0
+        let seconds = travel.kind.seconds
+        Task { @MainActor in
+            await Task.yield()
+            guard token == generation else { return }
+            withAnimation(.linear(duration: seconds)) {
+                self.progress = 1
+            } completion: {
+                guard token == self.generation else { return }
+                self.travel = nil
+                self.progress = 1
+                self.busy = false
+                self.shownSteps = nil
+            }
+        }
+    }
+
+    /// 立刻停在模型现在的局面。晚到的完成回调不再改画面。
+    func cancel() {
+        generation += 1
+        travel = nil
+        progress = 1
+        busy = false
+        shownSteps = nil
+        label = "idle"
+    }
+}
+
+/// 正在播放的一格。人和被推的箱子从原格滑到终局，模型本身不再等这段。
+struct SokobanTravel {
+    enum Kind {
+        case walk
+        case push
+        case bump
+
+        /// 模拟器核对用。数字就是这一段的毫秒数。
+        var label: String {
+            switch self {
+            case .walk: "walk:140"
+            case .push: "push:180"
+            case .bump: "bump:120"
+            }
+        }
+
+        /// 设计里的时长。走 140，推 180，顶墙 120。不另定。
+        var seconds: Double {
+            switch self {
+            case .walk: 0.140
+            case .push: 0.180
+            case .bump: 0.120
+            }
+        }
+    }
+
+    var kind: Kind
+    var direction: SokobanDirection
+    var from: GridPoint
+    var to: GridPoint
+    var boxFrom: GridPoint?
+    var boxTo: GridPoint?
+}
+
 /// 用色块画出当前关。格子太小时可以滚动，避免人和箱子缩成一点。
 struct SokobanBoard: View {
     var model: SokobanModel
+    var travel: SokobanTravel?
+    var progress: CGFloat
     var onMove: (SokobanDirection) -> Void
 
     /// 格子之间的缝。墙色从缝里露出来。
@@ -252,7 +391,7 @@ struct SokobanBoard: View {
         }
     }
 
-    /// 按格子尺寸把整张图排出来。
+    /// 按格子尺寸把整张图排出来。过渡中的人和箱子画在格子上面，避免被旁边的格子盖住。
     private func grid(_ metrics: BoardMetrics) -> some View {
         VStack(spacing: gutter) {
             ForEach(0..<model.rows, id: \.self) { row in
@@ -266,6 +405,9 @@ struct SokobanBoard: View {
         }
         .frame(width: metrics.boardWidth, height: metrics.boardHeight)
         .background(SokobanPalette.wall)
+        .overlay(alignment: .topLeading) {
+            movingPieces(metrics)
+        }
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -273,7 +415,7 @@ struct SokobanBoard: View {
         }
     }
 
-    /// 一格：墙或地板，地上的目标记号，再叠箱子和人。
+    /// 一格：墙或地板，地上的目标记号，再叠箱子和人。正在滑的棋子改由浮层画。
     private func cellView(_ point: GridPoint) -> some View {
         ZStack {
             Rectangle()
@@ -281,13 +423,50 @@ struct SokobanBoard: View {
             if model.targets.contains(point) {
                 SokobanTargetMark()
             }
-            if model.boxes.contains(point) {
+            if model.boxes.contains(point), travel?.boxTo != point {
                 SokobanCrate()
             }
-            if model.player == point {
+            if model.player == point, travel == nil {
                 SokobanPerson(facing: model.facing)
             }
         }
+    }
+
+    /// 人和被推的箱子沿这一格移动。顶墙只移出 0.2 格再回来。
+    @ViewBuilder
+    private func movingPieces(_ metrics: BoardMetrics) -> some View {
+        if let travel {
+            if let boxFrom = travel.boxFrom, let boxTo = travel.boxTo {
+                SokobanCrate()
+                    .frame(width: metrics.cell, height: metrics.cell)
+                    .offset(pieceOffset(slide(travel, from: boxFrom, to: boxTo), metrics))
+            }
+            SokobanPerson(facing: model.facing)
+                .frame(width: metrics.cell, height: metrics.cell)
+                .offset(pieceOffset(slide(travel, from: travel.from, to: travel.to), metrics))
+        }
+    }
+
+    /// 这一格在棋盘上的位置。走和推线性插值，顶墙前半出去、后半回来。
+    private func slide(_ travel: SokobanTravel, from: GridPoint, to: GridPoint) -> (row: CGFloat, col: CGFloat) {
+        switch travel.kind {
+        case .bump:
+            let out = progress < 0.5 ? progress / 0.5 : (1 - progress) / 0.5
+            let shift = 0.2 * out
+            return (CGFloat(from.row) + CGFloat(travel.direction.rowDelta) * shift, CGFloat(from.col) + CGFloat(travel.direction.colDelta) * shift)
+        case .walk, .push:
+            return (mix(CGFloat(from.row), CGFloat(to.row), progress), mix(CGFloat(from.col), CGFloat(to.col), progress))
+        }
+    }
+
+    /// 格子坐标换成棋盘左上角起算的偏移。缝也算进跨格的距离。
+    private func pieceOffset(_ cell: (row: CGFloat, col: CGFloat), _ metrics: BoardMetrics) -> CGSize {
+        let stride = metrics.cell + gutter
+        return CGSize(width: cell.col * stride, height: cell.row * stride)
+    }
+
+    private func mix(_ from: CGFloat, _ to: CGFloat, _ progress: CGFloat) -> CGFloat {
+        from + (to - from) * progress
     }
 
     /// 在棋盘上滑动一步，和方向按钮走同一个方法。棋盘需要滚动时把滑动留给滚动。
