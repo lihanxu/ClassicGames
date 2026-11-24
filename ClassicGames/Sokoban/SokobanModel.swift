@@ -78,6 +78,89 @@ final class SokobanModel {
         }
     }
 
+    /// 点到一格。先走不推箱子的最短路；没有这种路才沿直线推开挡路的箱子。走不到就完全不变。
+    /// 这一步只改模型，画面可以先停在终局；沿路径一格格滑是后面的过渡。
+    func walkTo(_ target: GridPoint) -> [SokobanStep] {
+        guard !won else { return [] }
+        guard contains(target), !walls.contains(target), !boxes.contains(target), target != player else { return [] }
+        let directions: [SokobanDirection]
+        if let walk = shortestWalk(to: target) {
+            directions = walk
+        } else if let line = straightPush(to: target) {
+            directions = line
+        } else {
+            return []
+        }
+        var taken: [SokobanStep] = []
+        for direction in directions {
+            let stepsBefore = steps
+            let boxesBefore = boxes
+            move(direction)
+            // 演算已经确认整段走得通。中途失败就不再继续，避免写下半段。
+            guard steps > stepsBefore else { break }
+            taken.append(SokobanStep(direction: direction, pushed: boxes != boxesBefore))
+        }
+        return taken
+    }
+
+    /// 不推箱子的最短路。步数少优先，其次转弯少，再按上、右、下、左。第一步不算转弯。
+    private func shortestWalk(to target: GridPoint) -> [SokobanDirection]? {
+        var best: [GridPoint: [SokobanDirection]] = [player: []]
+        var queue: [GridPoint] = [player]
+        var head = 0
+        while head < queue.count {
+            let current = queue[head]
+            head += 1
+            let path = best[current] ?? []
+            for direction in SokobanDirection.walkOrder {
+                let next = current.moving(direction)
+                guard contains(next), !walls.contains(next), !boxes.contains(next) else { continue }
+                let candidate = path + [direction]
+                if let existing = best[next], !candidate.isBetterWalk(than: existing) {
+                    continue
+                }
+                best[next] = candidate
+                queue.append(next)
+            }
+        }
+        let path = best[target] ?? []
+        return path.isEmpty ? nil : path
+    }
+
+    /// 同一行或同一列，把挡路的箱子整段推开。任一步走不通，或人最后站不进所点的格，就作废。
+    private func straightPush(to target: GridPoint) -> [SokobanDirection]? {
+        let direction: SokobanDirection
+        if target.row == player.row {
+            guard target.col != player.col else { return nil }
+            direction = target.col > player.col ? .right : .left
+        } else if target.col == player.col {
+            direction = target.row > player.row ? .down : .up
+        } else {
+            return nil
+        }
+        var simPlayer = player
+        var simBoxes = boxes
+        var simWon = won
+        var directions: [SokobanDirection] = []
+        while simPlayer != target {
+            if simWon { return nil }
+            let next = simPlayer.moving(direction)
+            guard contains(next), !walls.contains(next) else { return nil }
+            if simBoxes.contains(next) {
+                let beyond = next.moving(direction)
+                guard contains(beyond), !walls.contains(beyond), !simBoxes.contains(beyond) else { return nil }
+                simBoxes.remove(next)
+                simBoxes.insert(beyond)
+            }
+            simPlayer = next
+            directions.append(direction)
+            if simBoxes == targets {
+                simWon = true
+            }
+        }
+        return directions.isEmpty ? nil : directions
+    }
+
     /// 人和箱子回到这一关的原位，步数归零。不改已经写下的纪录，也不换关。
     func restart() {
         boxes = initialBoxes
@@ -130,4 +213,33 @@ final class SokobanModel {
 extension GameID {
     /// 推箱子的登记标识。
     static let sokoban = GameID(rawValue: "sokoban")
+}
+
+/// 点地走出的一格。推了箱子就没有脚步声。
+struct SokobanStep {
+    var direction: SokobanDirection
+    var pushed: Bool
+}
+
+extension Array where Element == SokobanDirection {
+    /// 步数少、转弯少，再按上、右、下、左。第一步不算转弯。
+    func isBetterWalk(than other: [SokobanDirection]) -> Bool {
+        if count != other.count { return count < other.count }
+        if turnCount != other.turnCount { return turnCount < other.turnCount }
+        for index in indices where self[index] != other[index] {
+            let order = SokobanDirection.walkOrder
+            let mine = order.firstIndex(of: self[index]) ?? 0
+            let theirs = order.firstIndex(of: other[index]) ?? 0
+            return mine < theirs
+        }
+        return false
+    }
+
+    /// 方向和上一步不同的次数。第一步没有上一步，不算。
+    private var turnCount: Int {
+        guard count > 1 else { return 0 }
+        return zip(self, dropFirst()).reduce(0) { total, pair in
+            total + (pair.0 == pair.1 ? 0 : 1)
+        }
+    }
 }

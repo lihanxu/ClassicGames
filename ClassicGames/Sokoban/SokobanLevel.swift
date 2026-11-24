@@ -87,6 +87,9 @@ enum SokobanDirection {
         }
     }
 
+    /// 寻路时展开的顺序。平局时更靠前的方向优先。
+    static let walkOrder: [SokobanDirection] = [.up, .right, .down, .left]
+
     /// 棋盘摘要里的朝向。和按钮名字分开，避免和中文文案绑死。
     var name: String {
         switch self {

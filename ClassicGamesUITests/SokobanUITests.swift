@@ -174,11 +174,12 @@ final class SokobanUITests: XCTestCase {
         XCTAssertTrue(board.waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "off")
 
-        let center = board.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-        center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 12, dy: 0)))
+        let player = cellCoordinate(board, row: 3, col: 2)
+        player.press(forDuration: 0.05, thenDragTo: player.withOffset(CGVector(dx: 12, dy: 0)))
         XCTAssertEqual(board.value as? String, SokobanMoves.start)
         XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "off")
 
+        let center = board.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         center.press(forDuration: 0.05, thenDragTo: center.withOffset(CGVector(dx: 0, dy: 80)))
         XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
         XCTAssertEqual(app.staticTexts["sokoban.motion"].label, "walk:140")
@@ -203,6 +204,34 @@ final class SokobanUITests: XCTestCase {
         XCTAssertNotEqual(before, nil)
         XCTAssertTrue(after == before || stepsAdvanced(from: before, to: after))
         XCTAssertEqual(app.staticTexts["sokoban.pan"].label, "on:0:0")
+    }
+
+    /// 点空地走到那一格。点墙、点箱子不变。有不推箱子的路时不改去推，哪怕绕得更远。
+    func testTapFloorWalksToThatCell() {
+        XCTAssertTrue(app.staticTexts["方向键、滑动或点空地，把箱子全部推到目标。"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        tapCell(board, row: 0, col: 0)
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        tapCell(board, row: 3, col: 1)
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        tapCell(board, row: 3, col: 2)
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        tapCell(board, row: 4, col: 2)
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+
+        app.buttons["chrome.restart"].tap()
+        tapCell(board, row: 3, col: 4)
+        XCTAssertEqual(board.value as? String, "level:1;player:3,4;boxes:3,1|4,3;steps:2;won:false;face:right")
+
+        tapCell(board, row: 4, col: 4)
+        XCTAssertEqual(board.value as? String, "level:1;player:4,4;boxes:3,1|4,3;steps:3;won:false;face:down")
+        tapCell(board, row: 4, col: 2)
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:7;won:false;face:down")
     }
 
     /// 顶墙、走出一格、推动一格各自留下时长。过关后的按键不再顶墙，重开清掉这段。
@@ -433,6 +462,24 @@ final class SokobanUITests: XCTestCase {
             }
         }
         return fields
+    }
+
+    /// 点到棋盘上的一格。缝和格子尺寸从 `sokoban.layout` 读。
+    private func tapCell(_ board: XCUIElement, row: Int, col: Int) {
+        cellCoordinate(board, row: row, col: col).tap()
+    }
+
+    /// 某一格的中心。布局没出来时会点在棋盘左上角。
+    private func cellCoordinate(_ board: XCUIElement, row: Int, col: Int) -> XCUICoordinate {
+        let fields = audioFields(app.staticTexts["sokoban.layout"].label)
+        let cell = Double(fields["cell"] ?? "") ?? 0
+        let originX = Double(fields["ox"] ?? "") ?? 0
+        let originY = Double(fields["oy"] ?? "") ?? 0
+        let gutter = Double(fields["gutter"] ?? "") ?? 0
+        let x = originX + (cell + gutter) * Double(col) + cell / 2
+        let y = originY + (cell + gutter) * Double(row) + cell / 2
+        let topLeft = board.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        return topLeft.withOffset(CGVector(dx: x, dy: y))
     }
 
     /// 大图上单指滑动最多让步数加 1，不能连走，也不能换关。

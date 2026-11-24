@@ -10,6 +10,8 @@ struct SokobanScreen: View {
     @State private var motion = SokobanMotion()
     /// 棋盘放得下是 off。停在 28pt 仍超出时是 on，并带上双指平移的偏移。
     @State private var panStatus = "off"
+    /// 格子尺寸和棋盘左上角，给点地换算手指落在哪一格。
+    @State private var layoutStatus = "cell:0;ox:0;oy:0;gutter:2"
 
     var body: some View {
         GameFrame(
@@ -30,7 +32,15 @@ struct SokobanScreen: View {
                     .foregroundStyle(SokobanPalette.target)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityIdentifier("sokoban.best")
-                SokobanBoard(model: model, travel: motion.travel, progress: motion.progress, onMove: move, onPanStatus: { panStatus = $0 })
+                SokobanBoard(
+                    model: model,
+                    travel: motion.travel,
+                    progress: motion.progress,
+                    onMove: move,
+                    onTap: tapFloor,
+                    onPanStatus: { panStatus = $0 },
+                    onLayout: { layoutStatus = $0 }
+                )
                 if model.won {
                     winRow
                 }
@@ -49,6 +59,10 @@ struct SokobanScreen: View {
                     .accessibilityIdentifier("sokoban.pan")
                     .accessibilityLabel(panStatus)
                     .accessibilityValue(panStatus)
+                Text(verbatim: layoutStatus)
+                    .accessibilityIdentifier("sokoban.layout")
+                    .accessibilityLabel(layoutStatus)
+                    .accessibilityValue(layoutStatus)
             }
             .font(.system(size: 1))
             .foregroundStyle(SokobanPalette.ink.opacity(0.02))
@@ -156,6 +170,21 @@ struct SokobanScreen: View {
         motion.cancel()
         audio.cancelPendingClear()
         model.advance()
+    }
+
+    /// 点空地或空目标。模型直接停在终局，沿路径的过渡留到下一条。
+    private func tapFloor(_ point: GridPoint) {
+        guard !motion.busy else { return }
+        let wonBefore = model.won
+        let taken = model.walkTo(point)
+        guard !taken.isEmpty else { return }
+        for step in taken where !step.pushed {
+            audio.playFootstep()
+        }
+        if !wonBefore && model.won {
+            scores.recordLower(.sokoban, score: model.steps)
+            audio.playClear(afterMilliseconds: taken.last?.pushed == true ? 180 : 140)
+        }
     }
 
     /// 这一关自己的最少步数。没有过关时是「—」。
@@ -352,7 +381,9 @@ struct SokobanBoard: View {
     var travel: SokobanTravel?
     var progress: CGFloat
     var onMove: (SokobanDirection) -> Void
+    var onTap: (GridPoint) -> Void
     var onPanStatus: (String) -> Void
+    var onLayout: (String) -> Void
 
     /// 格子之间的缝。墙色从缝里露出来。
     private let gutter: CGFloat = 2
@@ -365,6 +396,7 @@ struct SokobanBoard: View {
         GeometryReader { geo in
             let metrics = metrics(in: geo.size)
             let status = panStatus(metrics)
+            let layout = layoutText(metrics, in: geo.size)
             grid(metrics)
                 .offset(metrics.scrolls ? pan : .zero)
                 .frame(width: geo.size.width, height: geo.size.height, alignment: metrics.scrolls ? .topLeading : .center)
@@ -373,7 +405,9 @@ struct SokobanBoard: View {
                     SokobanBoardTouch(
                         panEnabled: metrics.scrolls,
                         pan: pan,
+                        layout: layout,
                         onMove: onMove,
+                        onTap: onTap,
                         onPan: { proposed in
                             pan = clamped(proposed, metrics, in: geo.size)
                         }
@@ -384,6 +418,9 @@ struct SokobanBoard: View {
                 }
                 .task(id: status) {
                     onPanStatus(status)
+                }
+                .task(id: layout.label) {
+                    onLayout(layout.label)
                 }
         }
         .accessibilityElement(children: .ignore)
@@ -396,6 +433,22 @@ struct SokobanBoard: View {
     private func panStatus(_ metrics: BoardMetrics) -> String {
         guard metrics.scrolls else { return "off" }
         return "on:\(Int(pan.width.rounded())):\(Int(pan.height.rounded()))"
+    }
+
+    /// 棋盘左上角和格子边长。点地用它判断手指落在哪一格，缝不算格子。
+    private func layoutText(_ metrics: BoardMetrics, in size: CGSize) -> SokobanBoardLayout {
+        let originX = metrics.scrolls ? pan.width : (size.width - metrics.boardWidth) / 2
+        let originY = metrics.scrolls ? pan.height : (size.height - metrics.boardHeight) / 2
+        let label = "cell:\(metrics.cell);ox:\(originX);oy:\(originY);gutter:\(gutter)"
+        return SokobanBoardLayout(
+            originX: originX,
+            originY: originY,
+            cell: metrics.cell,
+            gutter: gutter,
+            rows: model.rows,
+            cols: model.cols,
+            label: label
+        )
     }
 
     /// 双指不能把棋盘拖出空白。左上是 0，往右下看是负数。
@@ -503,11 +556,39 @@ struct SokobanBoard: View {
 
 }
 
-/// 棋盘上的手指。单指先到 24pt 的那一轴走一格；双指只在图超出时平移。
+/// 棋盘在点击区域里的位置。缝不属于相邻的格。
+struct SokobanBoardLayout: Equatable {
+    var originX: CGFloat
+    var originY: CGFloat
+    var cell: CGFloat
+    var gutter: CGFloat
+    var rows: Int
+    var cols: Int
+    var label: String
+
+    /// 点在格子里才返回。落在缝上、棋盘外，都是空。
+    func cell(at point: CGPoint) -> GridPoint? {
+        let x = point.x - originX
+        let y = point.y - originY
+        let stride = cell + gutter
+        guard stride > 0, x >= 0, y >= 0 else { return nil }
+        let col = Int(x / stride)
+        let row = Int(y / stride)
+        let localX = x - CGFloat(col) * stride
+        let localY = y - CGFloat(row) * stride
+        guard localX < cell, localY < cell else { return nil }
+        guard row >= 0, col >= 0, row < rows, col < cols else { return nil }
+        return GridPoint(row: row, col: col)
+    }
+}
+
+/// 棋盘上的手指。单指先到 24pt 的那一轴走一格；不到 24pt 且落在同一格才是点。
 private struct SokobanBoardTouch: UIViewRepresentable {
     var panEnabled: Bool
     var pan: CGSize
+    var layout: SokobanBoardLayout
     var onMove: (SokobanDirection) -> Void
+    var onTap: (GridPoint) -> Void
     var onPan: (CGSize) -> Void
 
     func makeUIView(context: Context) -> UIView {
@@ -518,10 +599,14 @@ private struct SokobanBoardTouch: UIViewRepresentable {
         let one = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.oneFinger(_:)))
         one.minimumNumberOfTouches = 1
         one.maximumNumberOfTouches = 1
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
+        // 手指没移动时平移手势会失败，这时才算点。滑出去了就不点。
+        tap.require(toFail: one)
         let two = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.twoFinger(_:)))
         two.minimumNumberOfTouches = 2
         two.maximumNumberOfTouches = 2
         view.addGestureRecognizer(one)
+        view.addGestureRecognizer(tap)
         view.addGestureRecognizer(two)
         return view
     }
@@ -529,7 +614,9 @@ private struct SokobanBoardTouch: UIViewRepresentable {
     func updateUIView(_ uiView: UIView, context: Context) {
         context.coordinator.panEnabled = panEnabled
         context.coordinator.pan = pan
+        context.coordinator.layout = layout
         context.coordinator.onMove = onMove
+        context.coordinator.onTap = onTap
         context.coordinator.onPan = onPan
     }
 
@@ -541,20 +628,27 @@ private struct SokobanBoardTouch: UIViewRepresentable {
     final class Coordinator: NSObject {
         var panEnabled = false
         var pan: CGSize = .zero
+        var layout = SokobanBoardLayout(originX: 0, originY: 0, cell: 1, gutter: 2, rows: 0, cols: 0, label: "")
         var onMove: (SokobanDirection) -> Void = { _ in }
+        var onTap: (GridPoint) -> Void = { _ in }
         var onPan: (CGSize) -> Void = { _ in }
         private var locked: SokobanDirection?
         private var origin: CGSize = .zero
+        private var startCell: GridPoint?
 
-        /// 单指。先到 24pt 的轴在松手时走一格。中途多了一根手指就不算滑动。
+        /// 单指。先到 24pt 的轴在松手时走一格。不到 24pt 且起落在同一格，才是点地。
         @objc func oneFinger(_ gesture: UIPanGestureRecognizer) {
             if gesture.numberOfTouches > 1 {
                 locked = nil
+                startCell = nil
                 return
             }
             let translation = gesture.translation(in: gesture.view)
             switch gesture.state {
-            case .began, .changed:
+            case .began:
+                locked = nil
+                startCell = layout.cell(at: gesture.location(in: gesture.view))
+            case .changed:
                 guard locked == nil else { return }
                 // 同一采样里两轴都过了 24pt 时，取绝对值更大的那一轴。
                 if abs(translation.x) >= 24, abs(translation.x) >= abs(translation.y) {
@@ -565,13 +659,26 @@ private struct SokobanBoardTouch: UIViewRepresentable {
             case .ended:
                 if let locked {
                     onMove(locked)
+                } else if hypot(translation.x, translation.y) < 24,
+                          let startCell,
+                          let endCell = layout.cell(at: gesture.location(in: gesture.view)),
+                          startCell == endCell {
+                    onTap(endCell)
                 }
                 locked = nil
+                startCell = nil
             case .cancelled, .failed:
                 locked = nil
+                startCell = nil
             default:
                 break
             }
+        }
+
+        /// 几乎没移动的点。滑过 24pt 的那下不会进这里。
+        @objc func tap(_ gesture: UITapGestureRecognizer) {
+            guard let cell = layout.cell(at: gesture.location(in: gesture.view)) else { return }
+            onTap(cell)
         }
 
         /// 双指只平移。格子还没被 28pt 卡住时不改位置，也不走步。
