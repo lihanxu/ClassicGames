@@ -285,7 +285,7 @@ struct SokobanBoard: View {
                 SokobanCrate()
             }
             if model.player == point {
-                SokobanPerson()
+                SokobanPerson(facing: model.facing)
             }
         }
     }
@@ -312,8 +312,10 @@ private struct BoardMetrics {
     var scrolls: Bool
 }
 
-/// 站着的人：头发、头、身体、两条腿。没有帽子和商标外形。
+/// 站着的人：头发、头、身体、两条腿。脸只表示朝向，不重画身体。
 struct SokobanPerson: View {
+    var facing: SokobanDirection = .down
+
     var body: some View {
         GeometryReader { geo in
             let s = min(geo.size.width, geo.size.height)
@@ -338,31 +340,67 @@ struct SokobanPerson: View {
                     .fill(SokobanPalette.skin)
                     .frame(width: s * 0.40, height: s * 0.40)
                     .offset(y: -s * 0.24)
-                    .overlay {
-                        SokobanFace(scale: s)
-                            .offset(y: -s * 0.24)
-                    }
+                SokobanFace(scale: s, facing: facing)
+                    .offset(y: -s * 0.24)
                 Capsule()
                     .fill(SokobanPalette.hair)
-                    .frame(width: s * 0.40, height: s * 0.18)
-                    .offset(y: -s * 0.36)
+                    .frame(width: s * 0.40, height: facing == .up ? s * 0.36 : s * 0.18)
+                    .offset(y: facing == .up ? -s * 0.26 : -s * 0.36)
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
     }
 }
 
-/// 脸上的两点。只占头部中间，避免画成某个已知角色。
+/// 脸上的朝向。鼻子伸出头部轮廓，后脑不画五官。
 private struct SokobanFace: View {
     var scale: CGFloat
+    var facing: SokobanDirection
 
     var body: some View {
+        switch facing {
+        case .down:
+            ZStack {
+                eyes
+                nose
+                    .frame(width: max(4, scale * 0.10), height: max(6, scale * 0.18))
+                    .offset(y: scale * 0.18)
+            }
+        case .left:
+            side(noseSign: -1)
+        case .right:
+            side(noseSign: 1)
+        case .up:
+            Color.clear
+        }
+    }
+
+    /// 朝屏幕的两只眼睛。
+    private var eyes: some View {
         HStack(spacing: scale * 0.08) {
-            Circle().frame(width: scale * 0.05, height: scale * 0.05)
-            Circle().frame(width: scale * 0.05, height: scale * 0.05)
+            Circle().frame(width: max(2, scale * 0.05), height: max(2, scale * 0.05))
+            Circle().frame(width: max(2, scale * 0.05), height: max(2, scale * 0.05))
         }
         .foregroundStyle(SokobanPalette.hair)
         .offset(y: scale * 0.02)
+    }
+
+    /// 侧脸：一只眼睛，鼻子朝这一侧伸出轮廓。
+    private func side(noseSign: CGFloat) -> some View {
+        ZStack {
+            Circle()
+                .frame(width: max(2, scale * 0.05), height: max(2, scale * 0.05))
+                .foregroundStyle(SokobanPalette.hair)
+                .offset(x: noseSign * scale * 0.08, y: scale * 0.02)
+            nose
+                .frame(width: max(6, scale * 0.22), height: max(3, scale * 0.08))
+                .offset(x: noseSign * scale * 0.18)
+        }
+    }
+
+    /// 鼻子用深色，和肤色分开，缩小时仍能看出伸出的方向。
+    private var nose: some View {
+        Capsule().fill(SokobanPalette.hair)
     }
 }
 

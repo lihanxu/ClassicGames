@@ -47,6 +47,8 @@ final class SokobanModel {
     private(set) var steps = 0
     private(set) var won = false
     private(set) var levelBest: Int?
+    /// 脸朝的方向。开局、重开和换关是下。顶墙不改。
+    private(set) var facing: SokobanDirection = .down
 
     private var initialBoxes: Set<GridPoint> = []
     private var initialPlayer = GridPoint(row: 0, col: 0)
@@ -66,6 +68,7 @@ final class SokobanModel {
             boxes.remove(next)
             boxes.insert(beyond)
         }
+        facing = direction
         player = next
         steps += 1
         // 箱子和目标必须正好重合。有箱子没到位，或目标还空着，都不算过关。
@@ -81,6 +84,7 @@ final class SokobanModel {
         player = initialPlayer
         steps = 0
         won = false
+        facing = .down
     }
 
     /// 打开编号对应的关。这一局丢掉，各关纪录保留。
@@ -98,6 +102,7 @@ final class SokobanModel {
         initialPlayer = level.player
         steps = 0
         won = false
+        facing = .down
         levelBest = SokobanRecords.best(level: clamped)
     }
 
@@ -114,7 +119,7 @@ final class SokobanModel {
         }
         .map { "\($0.row),\($0.col)" }
         .joined(separator: "|")
-        return "level:\(levelNumber);player:\(player.row),\(player.col);boxes:\(boxText);steps:\(steps);won:\(won)"
+        return "level:\(levelNumber);player:\(player.row),\(player.col);boxes:\(boxText);steps:\(steps);won:\(won);face:\(facing.name)"
     }
 
     private func contains(_ point: GridPoint) -> Bool {

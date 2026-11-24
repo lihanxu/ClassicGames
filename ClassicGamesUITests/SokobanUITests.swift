@@ -2,11 +2,11 @@ import XCTest
 
 /// 第 1 关的开局、最短走法和多走两步的走法。步数来自这一关的最短解。
 enum SokobanMoves {
-    static let start = "level:1;player:3,2;boxes:3,1|4,3;steps:0;won:false"
-    static let win = "level:1;player:2,2;boxes:1,2|3,1;steps:33;won:true"
-    static let longWin = "level:1;player:2,2;boxes:1,2|3,1;steps:35;won:true"
-    static let level2 = "level:2;player:2,3;boxes:3,2|3,3|4,3;steps:0;won:false"
-    static let level20 = "level:20;player:2,3;boxes:2,4|2,5;steps:0;won:false"
+    static let start = "level:1;player:3,2;boxes:3,1|4,3;steps:0;won:false;face:down"
+    static let win = "level:1;player:2,2;boxes:1,2|3,1;steps:33;won:true;face:up"
+    static let longWin = "level:1;player:2,2;boxes:1,2|3,1;steps:35;won:true;face:up"
+    static let level2 = "level:2;player:2,3;boxes:3,2|3,3|4,3;steps:0;won:false;face:down"
+    static let level20 = "level:20;player:2,3;boxes:2,4|2,5;steps:0;won:false;face:down"
     static let short = [
         "pad.down", "pad.left", "pad.up", "pad.right", "pad.right", "pad.right",
         "pad.down", "pad.left", "pad.up", "pad.left", "pad.left", "pad.down",
@@ -125,6 +125,45 @@ final class SokobanUITests: XCTestCase {
         XCTAssertEqual(board.value as? String, SokobanMoves.start)
         XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
         XCTAssertTrue(app.buttons["chrome.back"].isHittable)
+    }
+
+    /// 成功的走或推才改朝向。顶墙、过关后的按键、重开和换关都回到或停在该有的方向。
+    func testFacingFollowsSuccessfulMoves() {
+        XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
+        app.buttons["home.row.sokoban"].tap()
+        let board = app.descendants(matching: .any)["sokoban.board"]
+        XCTAssertTrue(board.waitForExistence(timeout: 5))
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        app.buttons["pad.left"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+
+        app.buttons["pad.down"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,2;boxes:3,1|4,3;steps:1;won:false;face:down")
+        app.buttons["pad.right"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:4,3;boxes:3,1|4,4;steps:2;won:false;face:right")
+        app.buttons["pad.up"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:3,3;boxes:3,1|4,4;steps:3;won:false;face:up")
+        app.buttons["pad.left"].tap()
+        XCTAssertEqual(board.value as? String, "level:1;player:3,2;boxes:3,1|4,4;steps:4;won:false;face:left")
+
+        app.buttons["chrome.restart"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.start)
+        XCTAssertFalse(app.buttons["sokoban.next"].exists)
+
+        play(SokobanMoves.short)
+        XCTAssertEqual(board.value as? String, SokobanMoves.win)
+        let locked = board.value as? String
+        play(["pad.left", "pad.right", "pad.up", "pad.down"])
+        XCTAssertEqual(board.value as? String, locked)
+
+        app.buttons["sokoban.next"].tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level2)
+        app.buttons["sokoban.levels"].tap()
+        let level20 = app.buttons["sokoban.pick.20"]
+        XCTAssertTrue(level20.waitForExistence(timeout: 5))
+        level20.tap()
+        XCTAssertEqual(board.value as? String, SokobanMoves.level20)
     }
 
     /// 选关能看出已过和五组难度。当前关描边还在，点编号仍进入该关开局。

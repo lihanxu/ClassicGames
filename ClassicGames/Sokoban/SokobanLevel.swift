@@ -68,4 +68,14 @@ enum SokobanDirection {
     case down
     case left
     case right
+
+    /// 棋盘摘要里的朝向。和按钮名字分开，避免和中文文案绑死。
+    var name: String {
+        switch self {
+        case .up: "up"
+        case .down: "down"
+        case .left: "left"
+        case .right: "right"
+        }
+    }
 }
