@@ -553,7 +553,7 @@ final class SokobanUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["home.best.sokoban"].label, "最高 33")
     }
 
-    /// 进入推箱子后背景循环开始；走一步有声，顶墙和推动不加这次计数；回首页和其他七款都停。
+    /// 进入推箱子后背景循环开始；走一步有脚步，推一格有推动声，顶墙不加；回首页和其他七款都停。
     func testBackgroundStartsOnEnterAndStopsOnLeave() {
         launch(hearing: "audible")
         waitAudio(["bgm": "stopped", "engine": "0", "steps": "0", "wins": "0"])
@@ -572,7 +572,7 @@ final class SokobanUITests: XCTestCase {
 
         app.buttons["pad.right"].tap()
         XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 2")
-        waitAudio(["bgm": "playing", "engine": "1", "steps": "1", "wins": "0"])
+        waitAudio(["bgm": "playing", "engine": "1", "steps": "1", "pushes": "1", "wins": "0"])
 
         app.buttons["chrome.back"].tap()
         XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
@@ -588,7 +588,7 @@ final class SokobanUITests: XCTestCase {
         }
     }
 
-    /// 过关短乐在走完第 1 关后发出。这一关最短解有 25 声脚步，推动不加。
+    /// 过关短乐在走完第 1 关后发出。这一关最短解有 25 声脚步和 8 声推动。
     func testClearPlaysShortTune() {
         launch(hearing: "audible")
         app.buttons["home.row.sokoban"].tap()
@@ -597,32 +597,32 @@ final class SokobanUITests: XCTestCase {
         play(SokobanMoves.short)
         XCTAssertEqual(board.value as? String, SokobanMoves.win)
         XCTAssertTrue(app.staticTexts["过关"].waitForExistence(timeout: 2))
-        waitAudio(["bgm": "playing", "engine": "1", "steps": "25", "wins": "1"], timeout: 2)
+        waitAudio(["bgm": "playing", "engine": "1", "steps": "25", "pushes": "8", "wins": "1"], timeout: 2)
         app.buttons["chrome.back"].tap()
         XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
         waitAudio(["bgm": "stopped", "engine": "0"])
     }
 
-    /// 系统静音时背景循环不送出，走步和过关也不计数。
+    /// 系统静音时背景循环不送出，走步、推动和过关也不计数。
     func testSilentEmitsNothing() {
         launch(hearing: "silent")
         waitAudio(["bgm": "stopped", "engine": "0"])
         app.buttons["home.row.sokoban"].tap()
         let board = app.descendants(matching: .any)["sokoban.board"]
         XCTAssertTrue(board.waitForExistence(timeout: 5))
-        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "pushes": "0", "wins": "0"])
 
         app.buttons["pad.left"].tap()
         app.buttons["pad.down"].tap()
         XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 1")
-        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "pushes": "0", "wins": "0"])
 
         app.buttons["chrome.restart"].tap()
         XCTAssertEqual(board.value as? String, SokobanMoves.start)
         play(SokobanMoves.short)
         XCTAssertEqual(board.value as? String, SokobanMoves.win)
         RunLoop.current.run(until: Date().addingTimeInterval(1))
-        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "pushes": "0", "wins": "0"])
 
         app.buttons["chrome.back"].tap()
         XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
@@ -726,7 +726,7 @@ final class SokobanUITests: XCTestCase {
         app.buttons["home.row.sokoban"].tap()
         XCTAssertTrue(board.waitForExistence(timeout: 5))
         app.buttons["pad.down"].tap()
-        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "wins": "0"])
+        waitAudio(["bgm": "silent", "engine": "0", "steps": "0", "pushes": "0", "wins": "0"])
     }
 
     /// 用固定的听感重新打开。正式游玩不带这个参数。
@@ -777,7 +777,7 @@ final class SokobanUITests: XCTestCase {
         XCTFail("音频状态是 \(last)，期望 \(expected)")
     }
 
-    /// `bgm:playing;engine:1;steps:0;wins:0` 拆成字段。
+    /// `bgm:playing;engine:1;steps:0;pushes:0;wins:0` 拆成字段。
     private func audioFields(_ token: String) -> [String: String] {
         var fields: [String: String] = [:]
         for part in token.split(separator: ";") {

@@ -172,7 +172,7 @@ struct SokobanScreen: View {
         }
     }
 
-    /// 按这一步的结果发声并播放过渡。过渡还在播就丢掉，不排队。步数没加是顶墙或推不动，不响。人动而箱子没动才有脚步。过关短乐等这一格过渡结束。
+    /// 按这一步的结果发声并播放过渡。过渡还在播就丢掉，不排队。步数没加是顶墙或推不动，不响。人动而箱子没动才有脚步，箱子跟着动才有推动声。过关短乐等这一格过渡结束。
     private func move(_ direction: SokobanDirection) {
         guard !motion.busy else { return }
         let stepsBefore = model.steps
@@ -187,7 +187,9 @@ struct SokobanScreen: View {
             return
         }
         let pushed = model.boxes != boxesBefore
-        if !pushed {
+        if pushed {
+            audio.playPush()
+        } else {
             audio.playFootstep()
         }
         if !wonBefore && model.won {
@@ -245,7 +247,9 @@ struct SokobanScreen: View {
         let stepsBefore = model.steps
         let wonBefore = model.won
         guard let step = model.hint() else { return }
-        if !step.pushed {
+        if step.pushed {
+            audio.playPush()
+        } else {
             audio.playFootstep()
         }
         if !wonBefore && model.won {
@@ -300,6 +304,8 @@ struct SokobanScreen: View {
         motion.playPath(cells, stepsAtStart: playback.stepsAtStart) { travel in
             if travel.kind == .walk {
                 audio.playFootstep()
+            } else if travel.kind == .push {
+                audio.playPush()
             }
         }
         if recordWin, !wonBefore, model.won {

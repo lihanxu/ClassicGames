@@ -10,11 +10,12 @@ final class SokobanAudio {
     private(set) var phase = "stopped"
     private(set) var feeding = false
     private(set) var stepCount = 0
+    private(set) var pushCount = 0
     private(set) var winCount = 0
 
-    /// 模拟器检查读这一串。静音时步数和过关次数都不加。
+    /// 模拟器检查读这一串。静音时走步、推动和过关次数都不加。
     var token: String {
-        "bgm:\(phase);engine:\(feeding ? 1 : 0);steps:\(stepCount);wins:\(winCount)"
+        "bgm:\(phase);engine:\(feeding ? 1 : 0);steps:\(stepCount);pushes:\(pushCount);wins:\(winCount)"
     }
 
     @ObservationIgnored private var inGame = false
@@ -25,9 +26,11 @@ final class SokobanAudio {
     @ObservationIgnored private let engine = AVAudioEngine()
     @ObservationIgnored private let loopNode = AVAudioPlayerNode()
     @ObservationIgnored private let stepNode = AVAudioPlayerNode()
+    @ObservationIgnored private let pushNode = AVAudioPlayerNode()
     @ObservationIgnored private let stingerNode = AVAudioPlayerNode()
     @ObservationIgnored private var loopBuffer: AVAudioPCMBuffer?
     @ObservationIgnored private var stepBuffer: AVAudioPCMBuffer?
+    @ObservationIgnored private var pushBuffer: AVAudioPCMBuffer?
     @ObservationIgnored private var clearBuffer: AVAudioPCMBuffer?
 
     /// 进入推箱子。已经在这一局时不把循环掐掉重来。
@@ -59,6 +62,13 @@ final class SokobanAudio {
         guard inGame, !Self.hearingIsSilent else { return }
         guard play(buffer: footstepBuffer(), on: stepNode) else { return }
         stepCount += 1
+    }
+
+    /// 成功推动一格。顶墙、推不动和静音都不进这里。
+    func playPush() {
+        guard inGame, !Self.hearingIsSilent else { return }
+        guard play(buffer: crateBuffer(), on: pushNode) else { return }
+        pushCount += 1
     }
 
     /// 重开、选关或下一关打断还没播完的过渡时，过关短乐不响。已经在响的这一声不停。
@@ -163,15 +173,17 @@ final class SokobanAudio {
         return started
     }
 
-    /// 把三个播放节点接到混音器。离开后节点还在，下次直接启动。
+    /// 把背景、脚步、推动和过关接到混音器。离开后节点还在，下次直接启动。
     private func installGraph() throws {
         if !graphReady {
             let format = SokobanTones.format
             engine.attach(loopNode)
             engine.attach(stepNode)
+            engine.attach(pushNode)
             engine.attach(stingerNode)
             engine.connect(loopNode, to: engine.mainMixerNode, format: format)
             engine.connect(stepNode, to: engine.mainMixerNode, format: format)
+            engine.connect(pushNode, to: engine.mainMixerNode, format: format)
             engine.connect(stingerNode, to: engine.mainMixerNode, format: format)
             graphReady = true
         }
@@ -189,6 +201,7 @@ final class SokobanAudio {
         }
         loopNode.stop()
         stepNode.stop()
+        pushNode.stop()
         stingerNode.stop()
         loopQueued = false
         if engine.isRunning {
@@ -211,6 +224,13 @@ final class SokobanAudio {
         if let stepBuffer { return stepBuffer }
         let buffer = SokobanTones.footstepBuffer()
         stepBuffer = buffer
+        return buffer
+    }
+
+    private func crateBuffer() -> AVAudioPCMBuffer {
+        if let pushBuffer { return pushBuffer }
+        let buffer = SokobanTones.pushBuffer()
+        pushBuffer = buffer
         return buffer
     }
 
@@ -294,6 +314,24 @@ enum SokobanTones {
             samples[index] = Float(envelope) * (Float(body) * 0.55 + noise * 0.45)
         }
         normalize(&samples, peak: 0.35)
+        return buffer(samples)
+    }
+
+    /// 90 毫秒推动：220 Hz 衰减正弦加一小段噪声，峰值 0.32。
+    static func pushBuffer() -> AVAudioPCMBuffer {
+        let frames = Int(sampleRate * 0.09)
+        var samples = [Float](repeating: 0, count: frames)
+        var state: UInt64 = 0xC0FFEE_220
+        for index in 0..<frames {
+            let time = Double(index) / sampleRate
+            let envelope = exp(-time * 48) * (1 - exp(-time / 0.002))
+            state = state &* 6364136223846793005 &+ 1
+            let noise = Float((state >> 40) & 0xFFFF) / 65535 * 2 - 1
+            let knock = sin(2 * .pi * 220 * time)
+            let noiseShare = time < 0.012 ? 0.55 : 0.12
+            samples[index] = Float(envelope) * (Float(knock) * Float(1 - noiseShare) + noise * Float(noiseShare))
+        }
+        normalize(&samples, peak: 0.32)
         return buffer(samples)
     }
 
