@@ -12,6 +12,9 @@ struct GameFrame<Content: View>: View {
     let rule: RecordRule
     /// 顶栏本局位置改显示这句话。五子棋用来显示进行中或胜负。
     var statusText: String? = nil
+    /// Optional per-game versioned metric. Other games keep the existing ScoreStore behavior.
+    var bestTextOverride: String? = nil
+    var restartTitle = "重新开始"
     /// 胜负结果。只有 matchWins 会在变成果一方获胜时加胜场。
     var outcome: MatchOutcome = .none
     let onRestart: () -> Void
@@ -33,7 +36,7 @@ struct GameFrame<Content: View>: View {
                 Text(verbatim: statusText ?? "\(scorePrefix) \(score)")
                     .font(.subheadline.monospacedDigit())
                     .accessibilityIdentifier("chrome.score")
-                Button("重新开始", action: onRestart)
+                Button(restartTitle, action: onRestart)
                     .accessibilityIdentifier("chrome.restart")
             }
             .font(.subheadline.weight(.semibold))
@@ -95,6 +98,7 @@ struct GameFrame<Content: View>: View {
 
     /// 五子棋显示黑白胜场，其它游戏显示一个最高纪录。
     private var bestLine: String {
+        if let bestTextOverride { return bestTextOverride }
         if case .matchWins = rule {
             return scores.winText(for: id)
         }

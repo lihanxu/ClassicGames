@@ -137,7 +137,7 @@ final class Phase3UITests: XCTestCase {
 
         app.terminate()
         app.launch()
-        XCTAssertTrue(app.staticTexts["经典小游戏"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["口袋游乐室"].waitForExistence(timeout: 8))
         let again = captureBests()
         for id in phase12 {
             XCTAssertEqual(again[id], before[id], id)

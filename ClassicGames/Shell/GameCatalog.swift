@@ -14,7 +14,7 @@ enum GameCatalog {
         GameEntry(
             id: .sokoban,
             title: "推箱子",
-            hint: "方向键、滑动或点空地，把箱子全部推到目标。",
+            hint: "滑动移动角色，将箱子推到目标。",
             rule: .lowerOnClear
         ),
         GameEntry(

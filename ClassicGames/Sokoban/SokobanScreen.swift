@@ -1,185 +1,1120 @@
 import SwiftUI
+import UIKit
+import CoreText
+#if DEBUG
+import os
+#endif
 
-/// 推箱子这一局。外框负责返回和总纪录，这里画关卡、棋盘和选关。
+/// Normal production destination, reached from the unchanged home navigation.
+/// Scroll metrics, never the board. No pad, path playback, hint, zoom or pan.
 struct SokobanScreen: View {
     @Environment(SokobanAudio.self) private var audio
-    @Environment(ScoreStore.self) private var scores
+    @Environment(AppRouter.self) private var router
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var model = SokobanModel()
-    @State private var showPicker = false
-    /// 走、推、顶墙的过渡。重开和换关会把它打断。
     @State private var motion = SokobanMotion()
-    /// 棋盘放得下是 off。停在 28pt 仍超出时是 on，并带上双指平移的偏移。
-    @State private var panStatus = "off"
-    /// 格子尺寸和棋盘左上角，给点地换算手指落在哪一格。
-    @State private var layoutStatus = "cell:0;ox:0;oy:0;gutter:2"
+    @State private var showPicker = false
+    @State private var showPause = false
+    @State private var showRecords = false
+    @State private var rootSize = CGSize.zero
+    @State private var rootInsets = EdgeInsets()
+    @State private var confirmRestart = false
+    @State private var confirmLeave = false
+    @State private var showPauseHelp = false
+    @State private var pendingDestination = ""
+    @State private var frames: [String: CGRect] = [:]
+    @State private var layoutStatus = "cell:0;ox:0;oy:0;gutter:0"
+    @State private var boardFit = SokobanBoardFit.calculate(width: 0, height: 0, rows: 1, cols: 1)
+    @State private var hideFirstHint = false
+    @State private var showShop = false
+    @State private var shopHighlight: SokobanShopHighlight?
+    @State private var hintPhase: HintPhase = .idle
+    @State private var hintFail: SokobanHintFail?
+    @State private var dpadRepeat = SokobanDPadRepeat()
+    @State private var dpadPressed: SokobanDirection?
+    @State private var dpadTimer: Timer?
+
+    private enum HintPhase { case idle, thinking, playing }
+
+    private var inputLocked: Bool {
+        motion.busy
+            || hintPhase != .idle
+            || showShop || showPause || showRecords || confirmRestart || confirmLeave || showPicker
+            || model.visitKind == .completedNow
+            || model.isReadOnlyCompletion
+            || !model.hasBoard
+    }
 
     var body: some View {
-        GameFrame(
-            id: .sokoban,
-            title: "推箱子",
-            score: scoreOnScreen,
-            scorePrefix: "步数",
-            // 步数还停在上一格时，先不把这一局交给外框，避免用少 1 的步数写纪录。看解的过关不参加比较。
-            isOver: model.won && model.winCounts && motion.shownSteps == nil,
-            banner: nil,
-            rule: .lowerOnClear,
-            onRestart: restart
-        ) {
-            VStack(spacing: 12) {
-                levelBar
-                Text(verbatim: bestLine)
-                    .font(.subheadline.monospacedDigit().weight(.semibold))
-                    .foregroundStyle(SokobanPalette.target)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityIdentifier("sokoban.best")
-                SokobanBoard(
-                    model: model,
-                    travel: motion.travel,
-                    progress: motion.progress,
-                    playbackBoxes: motion.playbackBoxes,
-                    onMove: move,
-                    onTap: tapFloor,
-                    onPanStatus: { panStatus = $0 },
-                    onLayout: { layoutStatus = $0 }
-                )
-                if model.won {
-                    winRow
+        GeometryReader { root in
+            let reserved = reservedBoardFit(in: root)
+            let showingResult = model.visitKind == .completedNow && hintPhase != .playing && hintPhase != .thinking
+            VStack(spacing: 8) {
+                header.sokobanMeasure("header")
+                infoRegion
+                if model.hasBoard {
+                    ZStack {
+                        VStack(spacing: 0) {
+                            ZStack {
+                                SokobanNativeCanvas(model: model, travel: motion.travel, progress: motion.progress, fit: reserved)
+                                SokobanSingleSwipe(onMove: move)
+                                    .frame(width: reserved.width, height: reserved.height)
+                                    .sokobanMeasure("drawn")
+                                if showsFirstHint(fit: reserved) { firstHint(fit: reserved) }
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .onChange(of: "\(root.size)-\(model.levelNumber)-\(reserved.cell)", initial: true) { _, _ in
+                                boardFit = reserved
+                                layoutStatus = "cell:\(reserved.cell);ox:\((root.size.width-reserved.width)/2);oy:0;gutter:\(reserved.gap)"
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityIdentifier("sokoban.board")
+                            .accessibilityLabel("棋盘，单次滑动移动一格")
+                            .accessibilityValue(model.token)
+                            .sokobanMeasure("board")
+                            .allowsHitTesting(!showingResult)
+                            if !showingResult {
+                                controls.sokobanMeasure("controls")
+                                    .padding(.bottom, 12)
+                            }
+                        }
+                        if showingResult {
+                            resultLayer
+                                .allowsHitTesting(!showPicker)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        Text(model.visitKind == .scoreOnly ? "仅有已存成绩，暂无可恢复棋盘" : "此局暂时无法恢复，原档未改动")
+                            .padding().accessibilityIdentifier("sokoban.board.unavailable")
+                    }.frame(maxHeight: .infinity)
+                    if !showingResult {
+                        controls.sokobanMeasure("controls")
+                    }
                 }
-                Text(verbatim: model.notice)
-                    .font(.subheadline)
-                    .foregroundStyle(SokobanPalette.target)
-                    .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
-                    .accessibilityIdentifier("sokoban.notice")
-                historyRow
-                SokobanPad(locked: model.won, onMove: move)
             }
             .padding(.horizontal, 16)
-            .padding(.bottom, 12)
+            .background {
+                Image("bg_garden_play")
+                    .resizable()
+                    .scaledToFill()
+                    .ignoresSafeArea()
+                    .accessibilityHidden(true)
+            }
+            .background(alignment: .topLeading) { observations(root) }
+            .onChange(of: "\(root.size)-\(root.safeAreaInsets)", initial: true) { _, _ in
+                rootSize = root.size; rootInsets = root.safeAreaInsets
+            }
+            .onAppear {
+                if SokobanLaunchIntent.openPickerOnAppear {
+                    SokobanLaunchIntent.openPickerOnAppear = false
+                    showPicker = true
+                }
+                #if DEBUG
+                installTestHooks()
+                #endif
+            }
         }
-        .background(alignment: .top) {
+        .coordinateSpace(name: "sokoban.screen")
+        .tint(SokobanPalette.target)
+        .toolbar(.hidden, for: .navigationBar).navigationBarBackButtonHidden(true)
+        .onPreferenceChange(SokobanFramesKey.self) { mergeFrames($0) }
+        .overlay {
+            if showPicker {
+                SokobanLevelPicker(
+                    current: model.levelNumber,
+                    coins: model.coins,
+                    totalStars: model.totalStars,
+                    starsForLevel: { model.persistenceBestStars(level: $0) },
+                    onClose: { showPicker = false },
+                    onOpenShop: { showPicker = false; shopHighlight = nil; showShop = true }
+                ) { number in
+                    motion.cancel(); audio.cancelPendingClear(); model.load(number); showPicker = false
+                }
+                .ignoresSafeArea(edges: .bottom)
+            }
+        }
+        .overlay {
+            if !showPicker && (showShop || hintFail != nil || showPause || showRecords || confirmRestart || confirmLeave) {
+                ZStack {
+                    Color.black.opacity(0.32).ignoresSafeArea()
+                    if showShop {
+                        SokobanShopSheet(
+                            wallet: model.persistenceWallet,
+                            highlight: shopHighlight,
+                            compact: typeSize.isAccessibilitySize,
+                            onBuy: { model.purchase($0) },
+                            onClose: { showShop = false; shopHighlight = nil }
+                        )
+                    } else if let fail = hintFail {
+                        hintFailCard(fail)
+                    } else if confirmLeave { leaveCard }
+                    else if confirmRestart { resetCard }
+                    else if showRecords { recordsCard }
+                    else { pauseCard }
+                }
+            }
+        }
+        #if DEBUG
+        .background(alignment: .topLeading) { hiddenTestDiagnostics }
+        #endif
+    }
+    private enum SokobanAppFont {
+        static let name = "ZCOOLKuaiLe-Regular"
+        static let register: Void = {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "ttf") else { return }
+            CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+        }()
+    }
+    private func kuaiLe(_ style: Font.TextStyle, size: CGFloat) -> Font {
+        _ = SokobanAppFont.register
+        return .custom(SokobanAppFont.name, size: size, relativeTo: style)
+    }
+    private var inkBrown: Color { Color(red: 78/255, green: 48/255, blue: 24/255) } // #4E3018
+    private var inkGreen: Color { Color(red: 46/255, green: 114/255, blue: 72/255) } // #2E7248
+    private var pillInsets: EdgeInsets { EdgeInsets(top: 12, leading: 18, bottom: 14, trailing: 18) }
+    private var plaqueInsets: EdgeInsets { EdgeInsets(top: 14, leading: 20, bottom: 16, trailing: 20) }
+    private func strokedTitle(_ text: String, size: CGFloat, identifier: String) -> some View {
+        let fill = Color(red: 1, green: 253/255, blue: 242/255) // #FFFDF2
+        let stroke = Color(red: 112/255, green: 66/255, blue: 30/255) // #70421E
+        return ZStack {
+            ForEach([-1, 0, 1], id: \.self) { x in
+                ForEach([-1, 0, 1], id: \.self) { y in
+                    if x != 0 || y != 0 {
+                        Text(text).font(kuaiLe(.title2, size: size)).foregroundStyle(stroke).offset(x: CGFloat(x), y: CGFloat(y))
+                            .accessibilityHidden(true)
+                    }
+                }
+            }
+            Text(text).font(kuaiLe(.title2, size: size)).foregroundStyle(fill)
+                .accessibilityIdentifier(identifier)
+                .accessibilityLabel(text)
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.6)
+    }
+    private func pillBackground() -> some View {
+        Image("hud_pill_capsule")
+            .resizable(capInsets: pillInsets, resizingMode: .stretch)
+    }
+    private var header: some View {
+        let titleId = model.isReadOnlyCompletion ? "sokoban.completed.title" : (model.won ? "sokoban.win" : "chrome.title")
+        let compact = typeSize.isAccessibilitySize
+        return HStack(alignment: .center, spacing: 8) {
+            Button { requestDestination("home") } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(inkBrown)
+                    .frame(width: 44, height: 44)
+                    .background(
+                        Circle().fill(Color(red: 1, green: 253/255, blue: 242/255).opacity(0.94))
+                    )
+                    .overlay(Circle().strokeBorder(Color(red: 176/255, green: 122/255, blue: 74/255), lineWidth: 1.4))
+            }
+            .accessibilityLabel("返回").accessibilityIdentifier("chrome.back").sokobanMeasure("back")
+            if !compact {
+                ZStack {
+                    Image("hud_title_plaque")
+                        .resizable(capInsets: plaqueInsets, resizingMode: .stretch)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .accessibilityHidden(true)
+                    strokedTitle(model.completionTitle, size: 24, identifier: titleId)
+                        .padding(.horizontal, 18)
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 44)
+            } else {
+                Color.clear
+                    .frame(maxWidth: .infinity, maxHeight: 1)
+                    .accessibilityIdentifier(titleId)
+                    .accessibilityLabel(model.completionTitle)
+            }
+            Button { requestDestination("levels") } label: {
+                Text("选关")
+                    .font(kuaiLe(.subheadline, size: compact ? 20 : 16))
+                    .foregroundStyle(inkBrown)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, compact ? 5 : 0)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .background { pillBackground() }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("sokoban.levels")
+            .accessibilityValue("\(SokobanLevels.count)").sokobanMeasure("levels")
+            Button { showRecords = true } label: {
+                Text("纪录")
+                    .font(kuaiLe(.subheadline, size: compact ? 20 : 16))
+                    .foregroundStyle(inkBrown)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, compact ? 5 : 0)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .background { pillBackground() }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("sokoban.records.open").sokobanMeasure("records")
+        }
+    }
+    /// One constrained info window holds level / steps / best / save copy.
+    /// Height is constant for a type size so a failed-save banner does not move or shrink the board.
+    /// AX5 keeps the failed message + retry on the first screen; leftover metrics may scroll.
+    private var reservedInfoHeight: CGFloat { typeSize.isAccessibilitySize ? 188 : 100 }
+    private func reservedBoardFit(in root: GeometryProxy) -> SokobanBoardFit {
+        // GeometryReader is already laid out in the safe area; do not subtract insets again.
+        let header: CGFloat = typeSize.isAccessibilitySize ? 72 : 48
+        let controls: CGFloat = typeSize.isAccessibilitySize ? 160 : 164
+        let spacing: CGFloat = 16
+        let compactChrome = header + reservedInfoHeight + controls + spacing
+        let width = max(0, root.size.width - 32)
+        let slot = max(120, root.size.height - compactChrome)
+        // Inset so the #243416 @ 35% / 10pt / y+4 board shadow is not clipped.
+        let inset: CGFloat = 16
+        let visual = SokobanVisualGrid.make(rows: model.rows, cols: model.cols)
+        return SokobanBoardFit.calculate(
+            width: max(0, width - inset * 2),
+            height: max(100, slot - inset * 2),
+            rows: visual.side,
+            cols: visual.side,
+            gap: 0
+        )
+    }
+    private func showsFirstHint(fit: SokobanBoardFit) -> Bool {
+        guard !hideFirstHint, !typeSize.isAccessibilitySize, model.hasBoard,
+              model.visitKind == .playing, model.steps == 0, !model.won else { return false }
+        let occupied = [model.player] + Array(model.boxes) + Array(model.targets)
+        return occupied.allSatisfy { $0.row > 1 }
+    }
+    private func firstHint(fit: SokobanBoardFit) -> some View {
+        VStack {
             HStack(spacing: 4) {
-                Text(verbatim: motion.label)
-                    .accessibilityIdentifier("sokoban.motion")
-                    .accessibilityLabel(motion.label)
-                    .accessibilityValue(motion.label)
-                Text(verbatim: panStatus)
-                    .accessibilityIdentifier("sokoban.pan")
-                    .accessibilityLabel(panStatus)
-                    .accessibilityValue(panStatus)
-                Text(verbatim: layoutStatus)
-                    .accessibilityIdentifier("sokoban.layout")
-                    .accessibilityLabel(layoutStatus)
-                    .accessibilityValue(layoutStatus)
+                Text("滑动一次，移动一格").font(.footnote)
+                Button { hideFirstHint = true } label: {
+                    Image(systemName: "xmark").font(.footnote.weight(.semibold)).frame(minWidth: 44, minHeight: 44)
+                }.accessibilityLabel("关闭").accessibilityIdentifier("sokoban.hint.close")
+            }
+            .padding(.leading, 14)
+            .background(Color.white.opacity(0.92), in: Capsule())
+            .shadow(color: Color.black.opacity(0.06), radius: 6, y: 2)
+            Spacer()
+        }
+        .padding(.top, 6)
+        .frame(width: fit.width, height: fit.height)
+        .allowsHitTesting(true)
+    }
+    private var resultLayer: some View {
+        let compact = typeSize.isAccessibilitySize
+        let plantHeight: CGFloat = compact ? 40 : 88
+        let canAdvance = model.won && !model.isReadOnlyCompletion && model.levelNumber < SokobanLevels.count && !model.isCampaignComplete
+        let title = model.completionTitle
+        return ZStack {
+            Color(red: 1, green: 249/255, blue: 237/255)
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0))
+            ForEach(1...24, id: \.self) { index in
+                Image(String(format: "sokoban_cele_confetti_%02d", index))
+                    .resizable().scaledToFit().frame(width: 22, height: 22)
+                    .offset(confettiOffset(index))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+            VStack {
+                Spacer()
+                HStack(alignment: .bottom) {
+                    Image("sokoban_cele_plant_left").resizable().scaledToFit().frame(height: plantHeight)
+                    Spacer()
+                    Image("sokoban_cele_plant_right").resizable().scaledToFit().frame(height: plantHeight)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            VStack(spacing: compact ? 8 : 10) {
+                Spacer(minLength: 8)
+                Text(title)
+                    .font(compact ? .system(size: 24, weight: .bold) : .largeTitle.bold())
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(Color(red: 47/255, green: 107/255, blue: 79/255))
+                if let settlement = model.lastSettlement {
+                    SokobanSettlementBlock(settlement: settlement, compact: compact)
+                }
+                if let kind = model.lastCompletionKind, let subtitle = celebrationSubtitle(kind) {
+                    if kind == .first || kind == .campaign || kind == .newRecord || kind == .tie {
+                        Text(subtitle)
+                            .font(compact ? .system(size: 18, weight: .semibold) : .subheadline.weight(.semibold))
+                            .foregroundStyle(Color(red: 47/255, green: 107/255, blue: 79/255))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 5)
+                            .background(Color(red: 47/255, green: 107/255, blue: 79/255).opacity(0.12), in: Capsule())
+                    } else {
+                        Text(subtitle)
+                            .font(compact ? .system(size: 16, weight: .regular) : .subheadline)
+                            .multilineTextAlignment(.center)
+                            .lineLimit(nil)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 16)
+                    }
+                }
+                if model.lastSettlement == nil {
+                    Text("本次 \(model.steps) 步")
+                        .font(compact ? .system(size: 22, weight: .bold) : .title2.bold())
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let best = model.levelBest {
+                        Text("个人最少 \(best) 步")
+                            .font(compact ? .system(size: 18, weight: .regular) : .body)
+                            .foregroundStyle(SokobanPalette.ink.opacity(0.72))
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 12)
+                VStack(spacing: 10) {
+                    if canAdvance {
+                        resultButton("下一关", primary: true, id: "sokoban.next", compact: compact) {
+                            if model.saveState == .failed { requestDestination("next") } else { advance() }
+                        }
+                        resultButton("选择关卡", primary: false, id: "sokoban.result.levels", compact: compact) {
+                            requestDestination("levels")
+                        }
+                        resultButton("再玩一次", primary: false, id: "chrome.restart", compact: compact) { restart() }
+                    } else {
+                        resultButton("返回选关", primary: true, id: "sokoban.result.levels", compact: compact) {
+                            requestDestination("levels")
+                        }
+                        resultButton("返回首页", primary: false, id: "sokoban.result.home", compact: compact) {
+                            requestDestination("home")
+                        }
+                        resultButton("再玩一次", primary: false, id: "chrome.restart", compact: compact) { restart() }
+                    }
+                }
+                .padding(.horizontal, compact ? 12 : 28)
+                Spacer(minLength: plantHeight + 8)
+            }
+            .padding(.horizontal, 12)
+        }
+        .clipShape(
+            UnevenRoundedRectangle(
+                topLeadingRadius: 22,
+                bottomLeadingRadius: 0,
+                bottomTrailingRadius: 0,
+                topTrailingRadius: 22,
+                style: .continuous
+            )
+        )
+    }
+
+    private func resultButton(_ title: String, primary: Bool, id: String, compact: Bool = false, action: @escaping () -> Void) -> some View {
+        // Full-width capsules sit over the old board hit area. Use a tap gesture
+        // (not Button's press-and-drag) so a post-clear swipe cannot advance.
+        Text(title)
+            .font(compact ? .system(size: 18, weight: .semibold) : .body.weight(.semibold))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .foregroundStyle(primary ? Color.white : SokobanPalette.ink)
+            .background(
+                Capsule().fill(primary ? Color(red: 47/255, green: 107/255, blue: 79/255) : Color.white.opacity(0.92))
+            )
+            .overlay(
+                Capsule().strokeBorder(primary ? Color.clear : Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1)
+            )
+            .contentShape(Capsule())
+            .onTapGesture(perform: action)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityIdentifier(id)
+            .accessibilityLabel(title)
+    }
+
+    private func celebrationSubtitle(_ kind: SokobanCompletionKind) -> String? {
+        switch kind {
+        case .first: return "首次完成"
+        case .newRecord: return "新纪录"
+        case .tie: return "追平纪录"
+        case .normal: return nil
+        case .lastNotAll: return "还可以继续挑战其他关卡。"
+        case .campaign: return "100 关都已完成"
+        }
+    }
+    private func confettiOffset(_ index: Int) -> CGSize {
+        let x = ((index * 47) % 160) - 80
+        let y = ((index * 31) % 220) - 110
+        return CGSize(width: x, height: y)
+    }
+    private var bestLine: String { model.levelBest.map { "本关纪录 \($0)" } ?? (model.hasUnverifiedPredecessor ? "本关纪录 待核实" : "本关纪录 —") }
+    /// Constrained, constant-height info window. Level + failed-save stay on the first
+    /// screen at AX5; other metrics may scroll. Board size does not follow this content.
+    private func infoPill(_ text: String, id: String, emphasize: Bool = false) -> some View {
+        let compact = typeSize.isAccessibilitySize
+        return Text(text)
+            .font(kuaiLe(.body, size: compact ? 22 : 16))
+            .foregroundStyle(emphasize ? inkGreen : inkBrown)
+            .lineLimit(1)
+            .minimumScaleFactor(0.55)
+            .padding(.horizontal, 12)
+            .padding(.vertical, compact ? 6 : 4)
+            .frame(minHeight: 44)
+            .background { pillBackground() }
+            .accessibilityIdentifier(id)
+            .accessibilityLabel(text)
+    }
+    private var infoRegion: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 6) {
+                if typeSize.isAccessibilitySize {
+                    levelLine.frame(maxWidth: .infinity)
+                    saveStatus
+                    HStack(alignment: .center, spacing: 8) {
+                        if model.visitKind != .completedNow {
+                            stepsParCapsule.sokobanMeasure("steps").sokobanMeasure("best")
+                                .frame(maxWidth: .infinity)
+                        }
+                        coinCapsule
+                    }
+                } else {
+                    HStack(alignment: .center, spacing: 8) {
+                        levelLine.frame(maxWidth: .infinity)
+                        stepsParCapsule.frame(maxWidth: .infinity).sokobanMeasure("steps").sokobanMeasure("best")
+                        coinCapsule.frame(maxWidth: .infinity)
+                    }
+                    saveStatus
+                    if let history = model.historicalBest {
+                        Text("历史纪录（旧版） \(history)").font(.footnote).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("sokoban.history.best")
+                    }
+                    if !model.notice.isEmpty {
+                        Text(model.notice).font(.footnote).accessibilityIdentifier("sokoban.notice")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .sokobanMeasure("metrics.content")
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(maxWidth: .infinity, minHeight: reservedInfoHeight, maxHeight: reservedInfoHeight, alignment: .top)
+        .clipped()
+        .accessibilityIdentifier("sokoban.metrics.scroll")
+        .sokobanMeasure("metrics")
+    }
+    private var levelLine: some View {
+        infoPill("第 \(model.levelNumber) 关 / \(SokobanLevels.count)", id: "sokoban.level")
+            .sokobanMeasure("level")
+    }
+    private func metricBlock(label: String, value: String, id: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.footnote).foregroundStyle(SokobanPalette.ink.opacity(0.7))
+            Text(value)
+                .font(.body.monospacedDigit().weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(id)
+                .accessibilityLabel(value)
+        }
+        .sokobanMeasure(id == "sokoban.level" ? "level" : id)
+    }
+    private var saveStatus: some View {
+        Group {
+            if model.saveState == .failed {
+                failedSaveBanner
+            } else if model.saveState == .retrying {
+                Text("正在重试保存…")
+                    .font(.footnote)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("sokoban.save.retrying")
+            } else if model.saveState == .saved {
+                Text("已保存到本机")
+                    .font(.footnote)
+                    .foregroundStyle(SokobanPalette.target)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("sokoban.save.saved")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private var failedSaveBanner: some View {
+        let message = Text("本步尚未保存")
+            .font(.subheadline)
+            .foregroundStyle(Color(red: 140/255, green: 64/255, blue: 36/255))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("sokoban.save.failed")
+        let retry = Button("重试") { _ = model.retrySave() }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 16)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(minWidth: 44, minHeight: 44)
+            .background(Color(red: 47/255, green: 107/255, blue: 79/255), in: Capsule())
+            .accessibilityIdentifier("sokoban.save.retry")
+        return Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    message
+                    HStack {
+                        Spacer(minLength: 0)
+                        retry
+                    }
+                }
+            } else {
+                HStack(alignment: .center, spacing: 8) {
+                    message
+                    Spacer(minLength: 8)
+                    retry
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(red: 1, green: 236/255, blue: 227/255), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+    private var recordsCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("纪录").font(.title3.bold())
+                Spacer()
+                Button("完成") { showRecords = false }
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(SokobanPalette.ink)
+                    .padding(.horizontal, 14)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .background(Color(red: 1, green: 249/255, blue: 237/255), in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1.5))
+                    .accessibilityIdentifier("sokoban.records.close")
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("第 \(model.levelNumber) 关").font(.caption)
+                    Text(bestLine).font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("sokoban.records.current")
+                    if let history = model.historicalBest {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("历史纪录（旧版）")
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text("旧版最少 \(history) 步")
+                                .font(.subheadline.monospacedDigit().weight(.semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.7)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityIdentifier("sokoban.records.legacy")
+                                .accessibilityLabel("历史纪录（旧版） \(history)")
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(red: 1, green: 244/255, blue: 230/255), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    if model.hasUnverifiedPredecessor {
+                        Text("原存档已隔离保留，原纪录暂无法核实；当前纪录只来自可验证的同版本记录。")
+                            .font(.footnote)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("sokoban.records.unverified")
+                    }
+                }
+                .sokobanMeasure("history.summary")
+                .sokobanMeasure("history.content")
+            }
+            .scrollBounceBehavior(.basedOnSize)
+            .accessibilityIdentifier("sokoban.records.scroll")
+            .sokobanMeasure("history")
+        }
+        .padding(20)
+        .frame(maxWidth: 420)
+        .background(Color(red: 1, green: 249/255, blue: 237/255), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 48)
+        .frame(maxHeight: .infinity)
+        .background(alignment: .topLeading) {
+            #if DEBUG
+            if SokobanTestSession.active != nil {
+                Text(measurements()).font(.system(size: 1)).foregroundStyle(SokobanPalette.ink.opacity(0.02))
+                    .allowsHitTesting(false).accessibilityIdentifier("sokoban.records.measurements")
+            }
+            #endif
+        }
+        .onPreferenceChange(SokobanFramesKey.self) { mergeFrames($0) }
+    }
+    private var pauseCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("已暂停")
+                .font(.title3.bold())
+                .frame(maxWidth: .infinity)
+            Button("继续游戏") { showPause = false; showPauseHelp = false }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Color(red: 47/255, green: 107/255, blue: 79/255), in: Capsule())
+                .accessibilityIdentifier("sokoban.pause.resume")
+            Button("选择关卡") { showPause = false; requestDestination("levels") }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(SokobanPalette.ink)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(Capsule().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+                .accessibilityIdentifier("sokoban.pause.levels")
+            Button("返回首页") { showPause = false; requestDestination("home") }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(SokobanPalette.ink)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(Capsule().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+                .accessibilityIdentifier("sokoban.pause.home")
+            Button("玩法说明") { showPauseHelp.toggle() }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(SokobanPalette.ink)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(Capsule().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+                .accessibilityIdentifier("sokoban.pause.help")
+            if showPauseHelp {
+                Text("滑动一次，移动一格。目标：把所有箱子推到目标点。")
+                    .font(.body)
+                    .foregroundStyle(SokobanPalette.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("sokoban.pause.rules")
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: 420)
+        .background(Color(red: 1, green: 249/255, blue: 237/255), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+        .padding(.horizontal, 20)
+    }
+    private var resetCard: some View {
+        VStack(spacing: 16) {
+            Text("重新开始这一关？")
+                .font(.title3.bold())
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("sokoban.reset.title")
+            Text("本局进度将清空，纪录保留。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("取消") { confirmRestart = false }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(SokobanPalette.ink)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(Capsule().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+                .accessibilityIdentifier("sokoban.reset.cancel")
+            Button("确认重置") { confirmRestart = false; restart() }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Color(red: 165/255, green: 62/255, blue: 45/255), in: Capsule())
+                .accessibilityIdentifier("sokoban.reset.confirm")
+        }
+        .padding(24)
+        .frame(maxWidth: 420)
+        .background(Color(red: 1, green: 249/255, blue: 237/255), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+        .padding(.horizontal, 20)
+    }
+    private var leaveCard: some View {
+        VStack(spacing: 16) {
+            Text("尚有进度未保存")
+                .font(.title3.bold())
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("sokoban.leave.title")
+            Text("离开后只能恢复到最近保存位置。")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("重试并离开") {
+                if model.retrySave() {
+                    confirmLeave = false
+                    performDestination()
+                }
+            }
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(Color(red: 47/255, green: 107/255, blue: 79/255), in: Capsule())
+            .accessibilityIdentifier("sokoban.leave.retry")
+            Button("留在本局") { confirmLeave = false }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(SokobanPalette.ink)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .overlay(Capsule().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+                .accessibilityIdentifier("sokoban.leave.stay")
+            Button("仍然离开") { confirmLeave = false; performDestination() }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .background(Color(red: 165/255, green: 62/255, blue: 45/255), in: Capsule())
+                .accessibilityIdentifier("sokoban.leave.leave")
+        }
+        .padding(24)
+        .frame(maxWidth: 420)
+        .background(Color(red: 1, green: 249/255, blue: 237/255), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+        .padding(.horizontal, 20)
+    }
+    #if DEBUG
+    private var hiddenTestDiagnostics: some View {
+        Group {
+            if let session = SokobanTestSession.active {
+                Text(session.diagnostic(model: model))
+                    .font(.system(size: 1))
+                    .foregroundStyle(.clear)
+                    .allowsHitTesting(false)
+                    .accessibilityIdentifier("sokoban.testing.state")
+                    .accessibilityLabel(session.diagnostic(model: model))
+            }
+        }
+        .frame(width: 1, height: 1)
+        .clipped()
+    }
+    private func installTestHooks() {
+        SokobanTestHooks.install { command in
+            handleTestCommand(command)
+        }
+    }
+    private func handleTestCommand(_ command: String) {
+        guard let session = SokobanTestSession.active else { return }
+        if command.hasPrefix("fault."), let mode = SokobanFaultStorage.Mode(rawValue: String(command.dropFirst(6))) {
+            session.storage.mode = mode
+        } else if command == "retry" {
+            _ = model.retrySave()
+        } else if command == "corrupt" {
+            session.corruptCurrentSlot(model: model)
+        } else if command == "undo" {
+            _ = model.undo(); motion.cancel()
+        } else if command == "redo" {
+            _ = model.redo(); motion.cancel()
+        }
+    }
+    #endif
+    private func mergeFrames(_ values: [String: CGRect]) {
+        var combined = frames; combined.merge(values, uniquingKeysWith: { _, new in new })
+        if combined != frames { frames = combined }
+    }
+    private var score: some View {
+        infoPill(model.visitKind == .scoreOnly ? "已通关" : "步数 \(motion.shownSteps ?? model.steps)", id: "chrome.score")
+            .sokobanMeasure("steps")
+    }
+    private var best: some View {
+        infoPill(bestLine, id: "sokoban.best", emphasize: true)
+            .sokobanMeasure("best")
+    }
+    private var stepsParCapsule: some View {
+        let steps = motion.shownSteps ?? model.steps
+        let visible = model.visitKind == .scoreOnly ? "已通关" : "步数 \(steps) · 最少 \(max(model.parSteps, 1))"
+        return ZStack {
+            infoPill(visible, id: "sokoban.steps.par")
+            VStack(spacing: 0) {
+                Text(model.visitKind == .scoreOnly ? "已通关" : "步数 \(steps)")
+                    .accessibilityIdentifier("chrome.score")
+                    .accessibilityLabel(model.visitKind == .scoreOnly ? "已通关" : "步数 \(steps)")
+                Text(bestLine)
+                    .accessibilityIdentifier("sokoban.best")
+                    .accessibilityLabel(bestLine)
             }
             .font(.system(size: 1))
-            .foregroundStyle(SokobanPalette.ink.opacity(0.02))
+            .foregroundStyle(.clear)
             .allowsHitTesting(false)
+            .accessibilityElement(children: .contain)
         }
-        .sheet(isPresented: $showPicker) {
-            SokobanLevelPicker(current: model.levelNumber) { number in
-                motion.cancel()
-                audio.cancelPendingClear()
-                model.load(number)
-                showPicker = false
+    }
+    private var coinCapsule: some View {
+        SokobanCoinCapsule(coins: model.coins, compact: typeSize.isAccessibilitySize) {
+            shopHighlight = nil
+            showPicker = false
+            showShop = true
+        }
+        .sokobanMeasure("coins")
+    }
+    private var controls: some View {
+        let compact = typeSize.isAccessibilitySize
+        let undoDisabled = model.steps == 0 || model.won || !model.hasBoard || model.isReadOnlyCompletion
+        let hintStatus: String? = {
+            switch hintPhase {
+            case .thinking: return "思考中"
+            case .playing: return "推进中"
+            case .idle: return nil
             }
-        }
-    }
-
-    /// 画面上的步数。过渡播完之前停在出发格，模型和外框用的是终局。
-    private var scoreOnScreen: Int {
-        motion.shownSteps ?? model.steps
-    }
-
-    /// 当前关号和选关入口。选关的值是关卡总数，给模拟器核对用。
-    private var levelBar: some View {
-        HStack(spacing: 8) {
-            Button("选关") { showPicker = true }
-                .buttonStyle(.plain)
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(SokobanPalette.ink)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(SokobanPalette.key, in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(SokobanPalette.wallEdge, lineWidth: 1.5)
+        }()
+        return HStack(alignment: .center, spacing: compact ? 8 : 12) {
+            VStack(spacing: compact ? 6 : 8) {
+                HStack(spacing: compact ? 6 : 8) {
+                    SokobanFuncCard(
+                        title: "撤销", icon: "icon_item_undo", id: "sokoban.undo",
+                        kind: undoDisabled ? .disabledLook : .normal,
+                        badge: model.undoItemCount > 0 ? .count(model.undoItemCount) : .plus,
+                        compact: compact, disabled: undoDisabled, action: undo
+                    )
+                    .sokobanMeasure("undo")
+                    SokobanFuncCard(
+                        title: "提示", icon: "icon_item_hint", id: "sokoban.hint",
+                        kind: .hint,
+                        badge: model.hintItemCount > 0 ? .count(model.hintItemCount) : .plus,
+                        compact: compact,
+                        disabled: model.won || !model.hasBoard || model.isReadOnlyCompletion || hintPhase != .idle,
+                        status: hintStatus,
+                        action: requestHint
+                    )
+                    .sokobanMeasure("hint")
                 }
-                .accessibilityIdentifier("sokoban.levels")
-                .accessibilityValue("\(SokobanLevels.count)")
-            Spacer(minLength: 0)
-            Text(verbatim: "第 \(model.levelNumber) 关 / \(SokobanLevels.count)")
-                .font(.headline)
-                .foregroundStyle(SokobanPalette.ink)
-                .accessibilityIdentifier("sokoban.level")
+                HStack(spacing: compact ? 6 : 8) {
+                    SokobanFuncCard(
+                        title: "重置", icon: "sokoban_icon_reset", id: "chrome.restart",
+                        compact: compact, disabled: false
+                    ) {
+                        if model.steps > 0 && !model.won && !model.isReadOnlyCompletion { confirmRestart = true } else { restart() }
+                    }
+                    .sokobanMeasure("restart")
+                    SokobanFuncCard(
+                        title: "暂停", icon: "sokoban_icon_pause", id: "sokoban.pause",
+                        compact: compact, disabled: false
+                    ) { showPause = true }
+                    .sokobanMeasure("pause")
+                }
+            }
+            Spacer(minLength: 8)
+            SokobanDPadView(compact: compact, pressed: dpadPressed, onPress: pressDPad, onRelease: releaseDPad)
+                .sokobanMeasure("dpad")
         }
+        .frame(maxWidth: .infinity)
+        .frame(minHeight: compact ? 148 : 156)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// 撤销和重做各一格。播放中的过渡直接丢掉，不排队。成功时立刻停在恢复后的局面。
+    private func hintFailCard(_ fail: SokobanHintFail) -> some View {
+        let ink = Color(red: 78/255, green: 48/255, blue: 24/255)
+        return VStack(alignment: .leading, spacing: 14) {
+            Text(fail.message)
+                .font(.body)
+                .foregroundStyle(ink)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("sokoban.hint.fail")
+            HStack(spacing: 10) {
+                Button("好的") { hintFail = nil }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityIdentifier("sokoban.hint.fail.ok")
+                Spacer()
+                Button("重置本关") {
+                    hintFail = nil
+                    restart()
+                }
+                .font(.body.weight(.semibold))
+                .frame(minWidth: 44, minHeight: 44)
+                .accessibilityIdentifier("sokoban.hint.reset")
+            }
+        }
+        .padding(18)
+        .background(Color(red: 1, green: 249/255, blue: 237/255), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .padding(.horizontal, 20)
+    }
+    /// Disabled ink is solid #5D5346 — never a lowered opacity that shows the grass through the art.
+    private var disabledControlInk: Color { Color(red: 93/255, green: 83/255, blue: 70/255) }
+    private func circularControl(_ title: String, _ systemImage: String, _ id: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        let accessibility = typeSize.isAccessibilitySize
+        let size: CGFloat = accessibility ? 64 : 72
+        let ink = disabled ? disabledControlInk : inkBrown
+        let art = disabled ? "btn_circle_disabled" : "btn_circle_normal"
+        // Fixed icon size so AX5 Dynamic Type cannot flush the glyph against the ring.
+        let iconSize: CGFloat = accessibility ? 17 : 20
+        return Button(action: action) {
+            VStack(spacing: 4) {
+                ZStack {
+                    Image(art).resizable().scaledToFit().frame(width: size, height: size)
+                    Image(systemName: systemImage)
+                        .font(.system(size: iconSize, weight: .semibold))
+                        .foregroundStyle(ink)
+                        .accessibilityHidden(true)
+                }
+                .frame(width: size, height: size)
+                controlCaption(title, ink: ink, size: accessibility ? 16 : 13)
+            }
+            .frame(minWidth: 44, minHeight: 44)
+        }
+        .buttonStyle(SokobanOpaqueButtonStyle())
+        .disabled(disabled)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(id)
+    }
+    /// Soft cream halo so captions stay readable on the garden, without fading the label.
+    private func controlCaption(_ title: String, ink: Color, size: CGFloat) -> some View {
+        let halo = Color(red: 1, green: 253/255, blue: 242/255)
+        return Text(title)
+            .font(kuaiLe(.caption, size: size))
+            .foregroundStyle(ink)
+            .multilineTextAlignment(.center)
+            .shadow(color: halo.opacity(0.95), radius: 0.8, x: 0, y: 0)
+            .shadow(color: halo.opacity(0.8), radius: 2.2, x: 0, y: 0)
+    }
+    private func requestDestination(_ destination: String) {
+
+        pendingDestination = destination
+        if model.saveState == .failed || model.saveState == .retrying { confirmLeave = true } else { performDestination() }
+    }
+    private func performDestination() {
+        switch pendingDestination { case "home": router.pop(); case "next": advance(); default: showPicker = true }
+        pendingDestination = ""
+    }
+    private func restart() { motion.cancel(); audio.cancelPendingClear(); stopDPad(); hintPhase = .idle; model.restart() }
+    private func advance() { motion.cancel(); audio.cancelPendingClear(); stopDPad(); hintPhase = .idle; model.advance() }
     private func undo() {
-        guard !motion.busy else { return }
-        guard model.undo() else { return }
-        motion.cancel()
-        audio.cancelPendingClear()
-    }
-
-    /// 把刚撤销的那一格放回来。没有可重做的步则画面不动。
-    private func redo() {
-        guard !motion.busy else { return }
-        guard model.redo() else { return }
-        motion.cancel()
-        audio.cancelPendingClear()
-    }
-
-    /// 撤销、重做、提示和看解。播放中的过渡直接丢掉，不排队。
-    private var historyRow: some View {
-        HStack(spacing: 8) {
-            historyButton("撤销", "sokoban.undo", undo)
-            historyButton("重做", "sokoban.redo", redo)
-            historyButton("提示", "sokoban.hint", hint)
-            historyButton("看解", "sokoban.solution", showSolution)
-            Spacer(minLength: 0)
+        guard !motion.busy, hintPhase == .idle else { return }
+        switch model.requestUndo() {
+        case .undone:
+            motion.cancel(); audio.cancelPendingClear()
+        case .needsShop:
+            shopHighlight = .undo
+            showShop = true
+        case .empty, .blocked:
+            break
         }
     }
-
-    /// 和选关同一套按键样子。空栈时点下去局面不变。
-    private func historyButton(_ title: String, _ identifier: String, _ action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.plain)
-            .font(.subheadline.weight(.semibold))
-            .foregroundStyle(SokobanPalette.ink)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(SokobanPalette.key, in: Capsule())
-            .overlay {
-                Capsule().strokeBorder(SokobanPalette.wallEdge, lineWidth: 1.5)
-            }
-            .accessibilityIdentifier(identifier)
-    }
-
-    /// 过关后才能进下一关。最后一关没有下一关。
-    private var winRow: some View {
-        HStack(spacing: 12) {
-            SokobanWinMark()
-            if model.levelNumber < SokobanLevels.count {
-                Button("下一关") { advance() }
-                    .buttonStyle(.plain)
-                    .font(.title3.bold())
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(SokobanPalette.player, in: Capsule())
-                    .accessibilityIdentifier("sokoban.next")
-            }
+    private func pressDPad(_ direction: SokobanDirection) {
+        if dpadPressed == direction { return }
+        let now = Date().timeIntervalSinceReferenceDate
+        let action = dpadRepeat.press(direction, at: now, allowed: model.canMove(direction), locked: inputLocked, won: model.won)
+        switch action {
+        case .step:
+            dpadPressed = direction
+            move(direction)
+            startDPadTimer()
+        case .stop:
+            dpadPressed = nil
         }
     }
-
-    /// 按这一步的结果发声并播放过渡。过渡还在播就丢掉，不排队。步数没加是顶墙或推不动，不响。人动而箱子没动才有脚步，箱子跟着动才有推动声。过关短乐等这一格过渡结束。
+    private func releaseDPad() {
+        _ = dpadRepeat.release()
+        stopDPad()
+    }
+    private func startDPadTimer() {
+        dpadTimer?.invalidate()
+        dpadTimer = Timer.scheduledTimer(withTimeInterval: 0.03, repeats: true) { _ in
+            tickDPad()
+        }
+    }
+    private func tickDPad() {
+        guard let direction = dpadRepeat.direction else { stopDPad(); return }
+        let action = dpadRepeat.tick(
+            at: Date().timeIntervalSinceReferenceDate,
+            allowed: model.canMove(direction),
+            locked: inputLocked && hintPhase == .idle,
+            won: model.won
+        )
+        switch action {
+        case .step:
+            move(direction)
+            if model.won { stopDPad() }
+        case .stop:
+            stopDPad()
+        case nil:
+            break
+        }
+    }
+    private func stopDPad() {
+        dpadTimer?.invalidate()
+        dpadTimer = nil
+        dpadPressed = nil
+        dpadRepeat.reset()
+    }
+    private func requestHint() {
+        guard hintPhase == .idle, !motion.busy, !showShop, hintFail == nil, !showPause, !confirmRestart, !confirmLeave, !showPicker else { return }
+        guard model.hasBoard, !model.won, !model.isReadOnlyCompletion else { return }
+        if model.hintItemCount == 0 {
+            shopHighlight = .hint
+            showShop = true
+            return
+        }
+        if let line = SokobanHintPlanner.referenceLine(level: model.levelNumber, player: model.player, boxes: model.boxes), !line.isEmpty {
+            startHintPlayback(line)
+            return
+        }
+        hintPhase = .thinking
+        let number = model.levelNumber
+        let player = model.player
+        let boxes = model.boxes
+        Task.detached {
+            let plan = SokobanHintPlanner.search(level: number, player: player, boxes: boxes, budget: SokobanHintPlanner.budget)
+            await MainActor.run { self.finishHintPlan(plan) }
+        }
+    }
+    private func finishHintPlan(_ plan: SokobanHintOutcome) {
+        guard hintPhase == .thinking else { return }
+        switch plan {
+        case .sequence(let moves, _):
+            startHintPlayback(moves)
+        case .deadlock:
+            hintPhase = .idle
+            hintFail = .deadlock
+            model.noticeHintFail("当前局面已无解，先撤销几步或重置本关再试试吧")
+        case .timeout:
+            hintPhase = .idle
+            hintFail = .timeout
+            model.noticeHintFail("当前路线偏离较远，重置本关后再点提示可直接帮你推好第一个箱子")
+        }
+    }
+    private func startHintPlayback(_ moves: [SokobanDirection]) {
+        guard model.beginHintPlayback(moves) else {
+            hintPhase = .idle
+            shopHighlight = .hint
+            showShop = true
+            return
+        }
+        hintPhase = .playing
+        hideFirstHint = true
+        let startSteps = model.steps
+        var player = model.player
+        var boxes = model.boxes
+        var cells: [SokobanPathCell] = []
+        for direction in moves {
+            guard let stepped = SokobanReplay.stepped(player: player, boxes: boxes, walls: model.walls, rows: model.rows, cols: model.cols, direction: direction) else { break }
+            let pushed = stepped.pushed
+            let boxFrom = pushed ? stepped.player : nil
+            let boxTo = pushed ? stepped.player.moving(direction) : nil
+            let travel = SokobanTravel(kind: pushed ? .push : .walk, direction: direction, from: player, to: stepped.player, boxFrom: boxFrom, boxTo: boxTo)
+            cells.append(SokobanPathCell(travel: travel, boxes: boxes))
+            player = stepped.player
+            boxes = stepped.boxes
+        }
+        guard !cells.isEmpty else {
+            hintPhase = .idle
+            return
+        }
+        motion.playPath(cells, stepsAtStart: startSteps) { travel in
+            self.model.move(travel.direction)
+            if travel.kind == .push { self.audio.playPush() } else { self.audio.playFootstep() }
+        }
+        if !self.motion.busy {
+            self.hintPhase = .idle
+        } else {
+            self.watchHintPlayback()
+        }
+    }
+    private func watchHintPlayback() {
+        Task { @MainActor in
+            while motion.busy {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+            }
+            hintPhase = .idle
+        }
+    }
     private func move(_ direction: SokobanDirection) {
-        guard !motion.busy else { return }
+        #if DEBUG
+        SokobanGestureProbe.emit("move direction=\(direction) busy=\(motion.busy) animations=\(UIView.areAnimationsEnabled) before=\(model.token)")
+        #endif
+        guard !motion.busy, hintPhase == .idle, !showShop, hintFail == nil, !showPause, !confirmRestart, !confirmLeave, !showPicker else { return }
         let stepsBefore = model.steps
         let boxesBefore = model.boxes
         let playerBefore = model.player
         let wonBefore = model.won
         model.move(direction)
+        #if DEBUG
+        SokobanGestureProbe.emit("model after=\(model.token)")
+        #endif
         if model.steps == stepsBefore {
             // 过关之后的按键不顶墙。局面没变才是顶墙或推不动。
             guard !wonBefore else { return }
@@ -193,8 +1128,7 @@ struct SokobanScreen: View {
             audio.playFootstep()
         }
         if !wonBefore && model.won {
-            // 外框要等画面步数追上才记。这里先把终局步数交出去，重开打断过渡也不会少记。
-            scores.recordLower(.sokoban, score: model.steps)
+            // 纪录已由模型的版本化存档记录；这里仅安排过关音效。
             audio.playClear(afterMilliseconds: pushed ? 180 : 140)
         }
         let boxFrom = pushed ? model.player : nil
@@ -209,215 +1143,419 @@ struct SokobanScreen: View {
         ), stepsOnScreen: stepsBefore)
     }
 
-    /// 重新开始立刻停在这一关开局，没播完的格子不再滑。
-    private func restart() {
-        motion.cancel()
-        audio.cancelPendingClear()
-        model.restart()
-    }
 
-    /// 下一关立刻进入开局。还没过关时模型自己不动。
-    private func advance() {
-        motion.cancel()
-        audio.cancelPendingClear()
-        model.advance()
+    @ViewBuilder private func observations(_ geo: GeometryProxy) -> some View {
+        #if DEBUG
+        if let session = SokobanTestSession.active {
+            VStack {
+                Text(motion.label).accessibilityIdentifier("sokoban.motion")
+                Text(layoutStatus).accessibilityIdentifier("sokoban.layout")
+                Text(measurements()).accessibilityIdentifier("sokoban.layout.metrics")
+            }.font(.system(size: 1)).foregroundStyle(SokobanPalette.ink.opacity(0.02)).allowsHitTesting(false)
+        }
+        #endif
     }
-
-    /// 点空地或空目标。模型先到终局，画面再按每一格的走或推滑过去，格与格之间不空档。
-    private func tapFloor(_ point: GridPoint) {
-        guard !motion.busy else { return }
-        let playerBefore = model.player
-        let boxesBefore = model.boxes
-        let stepsBefore = model.steps
-        let wonBefore = model.won
-        let taken = model.walkTo(point)
-        guard !taken.isEmpty else { return }
-        play(
-            SokobanPlayback(steps: taken, player: playerBefore, boxes: boxesBefore, stepsAtStart: stepsBefore),
-            wonBefore: wonBefore,
-            recordWin: true
-        )
-    }
-
-    /// 提示只走官方解的下一格，用单格的走或推，不接成路径。
-    private func hint() {
-        guard !motion.busy else { return }
-        let playerBefore = model.player
-        let boxesBefore = model.boxes
-        let stepsBefore = model.steps
-        let wonBefore = model.won
-        guard let step = model.hint() else { return }
-        if step.pushed {
-            audio.playPush()
-        } else {
-            audio.playFootstep()
+    private func measurements() -> String {
+        var rects: [String: [Double]] = [:]
+        for (key, f) in frames {
+            if key.hasPrefix("history") && !showRecords { continue }
+            if (key == "board" || key == "drawn") && !model.hasBoard { continue }
+            if key == "next" && (!model.won || model.isReadOnlyCompletion || model.levelNumber >= SokobanLevels.count || model.isCampaignComplete) { continue }
+            // Named space origin is the safe-area root; convert to window
+            // coordinates so layout assertions stay comparable across type sizes.
+            rects[key] = [f.minX + rootInsets.leading, f.minY + rootInsets.top, f.width, f.height]
         }
-        if !wonBefore && model.won {
-            scores.recordLower(.sokoban, score: model.steps)
-            audio.playClear(afterMilliseconds: step.pushed ? 180 : 140)
+        var obj: [String: Any] = ["viewport": [UIScreen.main.bounds.width, UIScreen.main.bounds.height],
+            "safeArea": [rootInsets.top, rootInsets.leading, rootInsets.bottom, rootInsets.trailing],
+            "root": [rootSize.width, rootSize.height], "category": String(describing: typeSize),
+            "level": model.levelNumber, "rows": model.rows, "cols": model.cols,
+            "cell": boardFit.cell, "gap": boardFit.gap, "drawnWidth": boardFit.width, "drawnHeight": boardFit.height, "frames": rects]
+        func region(_ name: String, scrolling: Bool) -> [String: Any] {
+            let viewport = frames[name] ?? .zero, content = frames[name+".content"] ?? .zero
+            return ["frame": [viewport.minX,viewport.minY,viewport.width,viewport.height],
+                "contentSize": [content.width,content.height],
+                "contentOffset": scrolling ? [max(0,viewport.minX-content.minX),max(0,viewport.minY-content.minY)] : [0.0,0.0],
+                "scrolling": scrolling]
         }
-        motion.start(SokobanTravel(
-            kind: step.pushed ? .push : .walk,
-            direction: step.direction,
-            from: playerBefore,
-            to: model.player,
-            boxFrom: step.pushed ? model.player : nil,
-            boxTo: step.pushed ? model.player.moving(step.direction) : nil
-        ), stepsOnScreen: stepsBefore)
-    }
-
-    /// 看解从这一关开局沿路径播放。这次过关不写纪录。
-    private func showSolution() {
-        guard !motion.busy else { return }
-        let playback = model.showSolution()
-        guard !playback.steps.isEmpty else { return }
-        play(playback, wonBefore: false, recordWin: false)
-    }
-
-    /// 按已经写入的步骤播放。格与格之间不再加时间。
-    private func play(_ playback: SokobanPlayback, wonBefore: Bool, recordWin: Bool) {
-        var player = playback.player
-        var boxes = playback.boxes
-        var cells: [SokobanPathCell] = []
-        for step in playback.steps {
-            let next = player.moving(step.direction)
-            let boxFrom = step.pushed ? next : nil
-            let boxTo = step.pushed ? next.moving(step.direction) : nil
-            cells.append(SokobanPathCell(
-                travel: SokobanTravel(
-                    kind: step.pushed ? .push : .walk,
-                    direction: step.direction,
-                    from: player,
-                    to: next,
-                    boxFrom: boxFrom,
-                    boxTo: boxTo
-                ),
-                boxes: boxes
-            ))
-            if let boxFrom, let boxTo {
-                boxes.remove(boxFrom)
-                boxes.insert(boxTo)
-            }
-            player = next
-        }
-        let totalMilliseconds = cells.reduce(0) { $0 + $1.travel.kind.milliseconds }
-        motion.playPath(cells, stepsAtStart: playback.stepsAtStart) { travel in
-            if travel.kind == .walk {
-                audio.playFootstep()
-            } else if travel.kind == .push {
-                audio.playPush()
-            }
-        }
-        if recordWin, !wonBefore, model.won {
-            scores.recordLower(.sokoban, score: model.steps)
-        }
-        if !wonBefore, model.won {
-            audio.playClear(afterMilliseconds: totalMilliseconds)
-        }
-    }
-
-    /// 这一关自己的最少步数。没有过关时是「—」。
-    private var bestLine: String {
-        guard let levelBest = model.levelBest else { return "本关纪录 —" }
-        return "本关纪录 \(levelBest)"
+        obj["metrics"] = region("metrics", scrolling: false)
+        obj["history"] = showRecords ? region("history", scrolling: true) : NSNull()
+        obj["recordsExpanded"] = showRecords
+        obj["renderMode"] = "assets"
+        let names = [
+            "tile_floor_walkable","tile_floor_blocked","tile_floor_target",
+            "wall_outer_brick_cream","wall_outer_brick_mint","wall_outer_brick_peach","wall_outer_brick_sky",
+            "crate_normal","crate_on_target","player_front","player_back","player_left","player_right",
+            "bg_garden_play","hud_title_plaque","hud_pill_capsule","hud_coin_capsule","btn_circle_normal","btn_circle_disabled",
+            "btn_func_card_normal","btn_func_card_disabled","btn_func_card_hint","icon_coin","icon_item_undo","icon_item_hint",
+            "icon_star_filled","icon_star_empty","dpad_up_normal","badge_count_bg","badge_plus_bg",
+            "sokoban_floor","sokoban_wall","sokoban_goal","sokoban_crate","sokoban_crate_on_target",
+            "sokoban_player_front","sokoban_player_back","sokoban_player_left","sokoban_player_right"
+        ]
+        obj["boardAssetsLoaded"] = names.allSatisfy { UIImage(named: $0) != nil }
+        return (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
 }
 
-/// 过关标记放在棋盘下面，避免盖住人和箱子。
-struct SokobanWinMark: View {
+private struct SokobanFramesKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
+}
+private extension View {
+    func sokobanMeasure(_ name: String) -> some View {
+        background(GeometryReader { geo in Color.clear.preference(key: SokobanFramesKey.self, value: [name: geo.frame(in: .named("sokoban.screen"))]) })
+    }
+}
+
+/// UIKit's relative translation may be reset at recognition; retain actual
+/// touch-down/end window coordinates. Actions still run once, only at ended.
+/// Window coordinates also avoid interpreting a view-layout change as travel.
+private final class SokobanTouchPan: UIPanGestureRecognizer {
+    private var trackingSequence = false
+    private var isSingleTouch = true
+    private var start: CGPoint?
+    private var latest: CGPoint?
+    private(set) var originInView: CGPoint?
+    var fullDisplacement: CGPoint? {
+        guard isSingleTouch, let start, let latest else { return nil }
+        return CGPoint(x: latest.x-start.x, y: latest.y-start.y)
+    }
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        if !trackingSequence {
+            trackingSequence = true
+            isSingleTouch = touches.count == 1 && event.allTouches?.count == 1
+            start = touches.first?.location(in: nil); latest = start
+            originInView = touches.first?.location(in: view)
+        } else { isSingleTouch = false }
+        super.touchesBegan(touches, with: event)
+    }
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
+        capture(touches, event); super.touchesMoved(touches, with: event)
+    }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
+        capture(touches, event); super.touchesEnded(touches, with: event)
+    }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
+        isSingleTouch = false; super.touchesCancelled(touches, with: event)
+    }
+    override func reset() {
+        super.reset(); trackingSequence = false
+        // Preserve end coordinates until target-actions have been delivered;
+        // the next real touchesBegan replaces them, never replays a move.
+    }
+    private func capture(_ touches: Set<UITouch>, _ event: UIEvent) {
+        isSingleTouch = isSingleTouch && touches.count == 1 && event.allTouches?.count == 1
+        latest = touches.first?.location(in: nil)
+    }
+}
+
+/// One finger, one completed gesture, one model move. No changed-event repeats,
+/// tap handler, second-finger scrolling, long press, or system-edge interception.
+private struct SokobanSingleSwipe: UIViewRepresentable {
+    var onMove: (SokobanDirection) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(onMove) }
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView(); view.backgroundColor = .clear
+        let pan = SokobanTouchPan(target: context.coordinator, action: #selector(Coordinator.ended(_:)))
+        pan.minimumNumberOfTouches = 1; pan.maximumNumberOfTouches = 1; pan.delegate = context.coordinator
+        view.addGestureRecognizer(pan); return view
+    }
+    func updateUIView(_ view: UIView, context: Context) { context.coordinator.onMove = onMove }
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onMove: (SokobanDirection) -> Void
+        init(_ onMove: @escaping (SokobanDirection) -> Void) { self.onMove = onMove }
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard let p = gestureRecognizer as? SokobanTouchPan, let view = p.view, let origin = p.originInView else { return false }
+            let x = origin.x, y = origin.y
+            let allowed = x >= 16 && x <= view.bounds.width-16 && y >= 12 && y <= view.bounds.height-12
+            #if DEBUG
+            SokobanGestureProbe.emit("begin allowed=\(allowed) origin=\(x),\(y) bounds=\(view.bounds)")
+            #endif
+            return allowed
+        }
+        @objc func ended(_ pan: UIPanGestureRecognizer) {
+            #if DEBUG
+            if pan.state != .changed { SokobanGestureProbe.emit("pan state=\(pan.state.rawValue) delta=\(pan.translation(in: pan.view))") }
+            #endif
+            guard pan.state == .ended else { return }
+            #if DEBUG
+            if SokobanTestSession.active?.forceRelativeGestureReset == true {
+                pan.setTranslation(CGPoint(x: 1, y: 0), in: pan.view)
+                SokobanGestureProbe.emit("injected observed relative reset to1; real touch input unchanged")
+            }
+            #endif
+            guard let d = (pan as? SokobanTouchPan)?.fullDisplacement else { return }
+            #if DEBUG
+            SokobanGestureProbe.emit("ended actualTouchDelta=\(d) relativeDelta=\(pan.translation(in: pan.view))")
+            #endif
+            if let direction = SokobanSwipe.direction(dx: d.x, dy: d.y) { onMove(direction) }
+        }
+    }
+}
+
+/// Keeps disabled circular controls fully opaque so `btn_circle_disabled` and
+/// solid ink do not inherit Button's default dimming (which would show the grass).
+struct SokobanOpaqueButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.opacity(configuration.isPressed ? 0.82 : 1)
+    }
+}
+
+/// Exterior blanks and padding use blocked floors; levels stay unchanged.
+private struct SokobanNativeCanvas: View, Animatable {
+    var model: SokobanModel
+    var travel: SokobanTravel?
+    var progress: CGFloat
+    var fit: SokobanBoardFit
+    var animatableData: CGFloat { get { progress } set { progress = newValue } }
+
+    /// v2.4 solid feel: sprites fill the cell; the player's feet sit at (0.5, 0.90).
+    private let frameScale: CGFloat = 1.0
+    private let footAnchor = CGPoint(x: 0.5, y: 0.90)
+
     var body: some View {
-        Text("过关")
-            .font(.title2.bold())
-            .foregroundStyle(.white)
-            .padding(.horizontal, 22)
-            .padding(.vertical, 10)
-            .background(SokobanPalette.target, in: Capsule())
-            .accessibilityIdentifier("sokoban.win")
+        Canvas { context, size in
+            let grid = SokobanVisualGrid.make(rows: model.rows, cols: model.cols)
+            let cell = CGFloat(fit.cell), stride = CGFloat(fit.cell + fit.gap)
+            let ox = (size.width - fit.width) / 2
+            let oy = (size.height - fit.height) / 2
+            func visualRect(row: Int, col: Int) -> CGRect {
+                CGRect(x: ox + CGFloat(col) * stride, y: oy + CGFloat(row) * stride, width: cell, height: cell)
+            }
+            func rect(_ p: GridPoint) -> CGRect {
+                let v = grid.map(p)
+                return visualRect(row: v.row, col: v.col)
+            }
+            func centered(_ a: GridPoint, _ b: GridPoint) -> CGRect {
+                let ra = rect(a), rb = rect(b)
+                return CGRect(x: ra.minX + (rb.minX - ra.minX) * progress, y: ra.minY + (rb.minY - ra.minY) * progress, width: cell, height: cell)
+            }
+            func scaledRect(_ r: CGRect, anchor: CGPoint) -> CGRect {
+                let w = r.width * frameScale, h = r.height * frameScale
+                let foot = CGPoint(x: r.minX + r.width * 0.5, y: r.minY + r.height * anchor.y)
+                return CGRect(x: foot.x - w * anchor.x, y: foot.y - h * anchor.y, width: w, height: h)
+            }
+            let boardRect = CGRect(x: ox, y: oy, width: fit.width, height: fit.height)
+            context.drawLayer { layer in
+                layer.addFilter(.shadow(color: Color(red: 36/255, green: 52/255, blue: 22/255).opacity(0.35), radius: 10, x: 0, y: 4))
+                layer.fill(Path(roundedRect: boardRect, cornerRadius: 2), with: .color(Color(red: 249/255, green: 232/255, blue: 200/255)))
+            }
+            let bricks = ["wall_outer_brick_cream", "wall_outer_brick_mint", "wall_outer_brick_peach", "wall_outer_brick_sky"]
+            let exterior = SokobanBoardFit.exterior(rows: model.rows, cols: model.cols, walls: model.walls)
+            func wallName(row: Int, col: Int) -> String {
+                let last = grid.side - 1
+                let index: Int
+                if row == 0 { index = col }
+                else if col == last { index = last + row }
+                else if row == last { index = last * 2 + (last - col) }
+                else { index = last * 3 + (last - row) }
+                return bricks[((index % 4) + 4) % 4]
+            }
+            for row in 0..<grid.side {
+                for col in 0..<grid.side {
+                    let r = visualRect(row: row, col: col)
+                    guard let paint = SokobanFloorPaint.paint(
+                        visualRow: row,
+                        visualCol: col,
+                        grid: grid,
+                        rows: model.rows,
+                        cols: model.cols,
+                        walls: model.walls,
+                        targets: model.targets,
+                        exterior: exterior
+                    ) else {
+                        context.draw(context.resolve(Image(wallName(row: row, col: col))), in: r)
+                        continue
+                    }
+                    let tile: String
+                    switch paint {
+                    case .blocked: tile = "tile_floor_blocked"
+                    case .target: tile = "tile_floor_target"
+                    case .walkable: tile = "tile_floor_walkable"
+                    }
+                    context.draw(context.resolve(Image(tile)), in: r)
+                }
+            }
+            func box(_ r: CGRect, onTarget: Bool) {
+                context.draw(context.resolve(Image(onTarget ? "crate_on_target" : "crate_normal")), in: scaledRect(r, anchor: CGPoint(x: 0.5, y: 0.5)))
+            }
+            for p in model.boxes where p != travel?.boxTo { box(rect(p), onTarget: model.targets.contains(p)) }
+            if let t = travel, let from = t.boxFrom, let to = t.boxTo {
+                box(centered(from, to), onTarget: progress > 0.99 && model.targets.contains(to))
+            }
+            var playerRect = travel.map { centered($0.from, $0.to) } ?? rect(model.player)
+            if let t = travel, t.kind == .bump {
+                let delta = t.to.moving(t.direction)
+                let distance = sin(progress * .pi) * cell * 0.13
+                playerRect = playerRect.offsetBy(dx: CGFloat(delta.col - t.to.col) * distance, dy: CGFloat(delta.row - t.to.row) * distance)
+            }
+            let name: String
+            switch model.facing {
+            case .up: name = "player_back"
+            case .down: name = "player_front"
+            case .left: name = "player_left"
+            case .right: name = "player_right"
+            }
+            context.draw(context.resolve(Image(name)), in: scaledRect(playerRect, anchor: footAnchor))
+        }.accessibilityHidden(true)
     }
 }
 
-/// 100 关按难度分成五组。点编号进入该关开局，标题不响应点击。
 struct SokobanLevelPicker: View {
     var current: Int
+    var coins: Int = 0
+    var totalStars: Int = 0
+    var starsForLevel: (Int) -> Int = { _ in 0 }
+    var onClose: () -> Void = {}
+    var onOpenShop: () -> Void = {}
     var onPick: (Int) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 5)
-    /// 分组界线和需求一致。每组 20 关，标题写已过数。
-    private let groups: [(name: String, start: Int, end: Int)] = [
-        ("入门", 1, 20),
-        ("初级", 21, 40),
-        ("中级", 41, 60),
-        ("进阶", 61, 80),
-        ("挑战", 81, 100)
-    ]
+    private var columns: [GridItem] {
+        let count = typeSize.isAccessibilitySize ? 1 : 2
+        return Array(repeating: GridItem(.flexible(), spacing: 12), count: count)
+    }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(SokobanLevels.credit)
-                        .font(.footnote)
-                        .foregroundStyle(SokobanPalette.ink.opacity(0.7))
-                        .frame(maxWidth: .infinity)
-                        .accessibilityIdentifier("sokoban.credit")
-                    ForEach(groups, id: \.name) { group in
-                        groupSection(group.name, group.start, group.end)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Button(action: onClose) {
+                    if typeSize.isAccessibilitySize {
+                        Text("返回")
+                            .font(.body.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .background(Color.white.opacity(0.92), in: Capsule())
+                            .overlay(Capsule().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
+                    } else {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
+                            .frame(minWidth: 44, minHeight: 44)
+                            .background(Color.white.opacity(0.92), in: Circle())
+                            .overlay(Circle().strokeBorder(Color(red: 201/255, green: 184/255, blue: 150/255), lineWidth: 1))
                     }
                 }
-                .padding(16)
-            }
-            .background(SokobanPalette.floor.ignoresSafeArea())
-            .navigationTitle("选关")
-            .navigationBarTitleDisplayMode(.inline)
-        }
-    }
-
-    /// 一组的标题和编号。标题只展示进度，点它不换关。
-    private func groupSection(_ name: String, _ start: Int, _ end: Int) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(verbatim: "\(name) \(SokobanRecords.clearedCount(from: start, through: end))/20")
-                .font(.headline)
                 .foregroundStyle(SokobanPalette.ink)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier("sokoban.group.\(name)")
-            LazyVGrid(columns: columns, spacing: 8) {
-                ForEach(start...end, id: \.self) { number in
-                    levelButton(number)
+                .accessibilityLabel("返回")
+                .accessibilityIdentifier("sokoban.levels.close")
+                Text("选择关卡")
+                    .font(.title3.bold())
+                    .foregroundStyle(SokobanPalette.ink)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer()
+                HStack(spacing: 6) {
+                    Image("icon_star_filled").resizable().scaledToFit().frame(width: 16, height: 16)
+                    Text("\(totalStars)/300")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                 }
+                .foregroundStyle(SokobanPalette.ink)
+                .padding(.horizontal, 10)
+                .frame(minHeight: 44)
+                .background(Color.white.opacity(0.92), in: Capsule())
+                .accessibilityIdentifier("sokoban.stars.total")
+                .accessibilityLabel("已获 \(totalStars) 星，共 300 星")
+                SokobanCoinCapsule(coins: coins, compact: typeSize.isAccessibilitySize, action: onOpenShop)
             }
+            Text("共 \(SokobanLevels.count) 关 · 点选关卡开始或继续")
+                .font(.subheadline)
+                .foregroundStyle(SokobanPalette.ink.opacity(0.75))
+            Text(SokobanLevels.credit)
+                .font(.footnote)
+                .foregroundStyle(SokobanPalette.ink.opacity(0.7))
+                .accessibilityIdentifier("sokoban.credit")
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(1...SokobanLevels.count, id: \.self) { number in
+                        levelCard(number)
+                    }
+                }
+                .padding(.bottom, 24)
+            }
+            .accessibilityIdentifier("sokoban.levels.scroll")
         }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .contentShape(Rectangle())
+        .background {
+            Image("sokoban_select_bg")
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+        }
+        .background(Color(red: 1, green: 249/255, blue: 237/255).ignoresSafeArea())
     }
 
-    /// 一关的编号。已过的在编号下写「已过」；当前关保留深色描边。
-    private func levelButton(_ number: Int) -> some View {
-        let cleared = SokobanRecords.best(level: number) != nil
+    private func levelCard(_ number: Int) -> some View {
+        let best = SokobanRecords.best(level: number)
+        let progress = SokobanRecords.inProgressSteps(level: number)
+        let historical = SokobanRecords.historicalBest(level: number)
         let selected = number == current
-        return Button {
-            onPick(number)
-        } label: {
-            VStack(spacing: 2) {
-                Text("\(number)")
-                    .font(.headline)
-                if cleared {
-                    Text("已过")
-                        .font(.caption.weight(.semibold))
+        let palette = Self.cardPalette[(number - 1) % Self.cardPalette.count]
+        return Button { onPick(number) } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(String(format: "%02d", number))
+                        .font(.title.bold())
+                        .monospacedDigit()
+                    Spacer(minLength: 8)
+                    if historical != nil {
+                        Text("旧版纪录")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.white.opacity(0.8), in: Capsule())
+                    }
+                }
+                HStack(spacing: 3) {
+                    ForEach(1...3, id: \.self) { index in
+                        Image(index <= starsForLevel(number) ? "icon_star_filled" : "icon_star_empty")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 14, height: 14)
+                    }
+                }
+                .accessibilityLabel("\(starsForLevel(number)) 星")
+                .accessibilityIdentifier("sokoban.pick.stars.\(number)")
+                if let progress {
+                    Text("进行中")
+                        .font(.subheadline.weight(.semibold))
+                    Text("已走 \(progress) 步")
+                        .font(.footnote)
+                } else if let best {
+                    Text("已通关")
+                        .font(.subheadline.weight(.semibold))
                         .accessibilityIdentifier("sokoban.cleared.\(number)")
+                    Text("最少 \(best) 步")
+                        .font(.footnote)
+                } else {
+                    Text("未玩")
+                        .font(.subheadline)
                 }
             }
-            .foregroundStyle(selected ? Color.white : SokobanPalette.ink)
-            .frame(maxWidth: .infinity, minHeight: cleared ? 64 : 46)
-            .background(
-                selected ? SokobanPalette.player : SokobanPalette.key,
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
+            .foregroundStyle(SokobanPalette.ink)
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 88, alignment: .topLeading)
+            .background(palette, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(SokobanPalette.wallEdge, lineWidth: selected ? 3 : 1)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(selected ? SokobanPalette.ink.opacity(0.55) : Color.white.opacity(0.6), lineWidth: selected ? 2 : 1)
             }
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("sokoban.pick.\(number)")
     }
+
+    private static let cardPalette: [Color] = [
+        Color(red: 210/255, green: 232/255, blue: 214/255),
+        Color(red: 186/255, green: 216/255, blue: 160/255),
+        Color(red: 242/255, green: 196/255, blue: 196/255),
+        Color(red: 186/255, green: 214/255, blue: 230/255),
+        Color(red: 245/255, green: 232/255, blue: 196/255),
+        Color(red: 214/255, green: 196/255, blue: 230/255)
+    ]
 }
 
 /// 走、推和顶墙的画面。模型先到终局，这里只负责滑过去；重开和换关会作废还没播完的一段。
@@ -565,540 +1703,11 @@ struct SokobanTravel {
     var boxFrom: GridPoint?
     var boxTo: GridPoint?
 }
-
-/// 用色块画出当前关。放得下就铺满；格子小到 28pt 仍放不下时，单指仍只走一格，双指才平移。
-struct SokobanBoard: View {
-    var model: SokobanModel
-    var travel: SokobanTravel?
-    var progress: CGFloat
-    /// 沿路径播放时用这一格开始时的箱子。空则画模型终局。
-    var playbackBoxes: Set<GridPoint>?
-    var onMove: (SokobanDirection) -> Void
-    var onTap: (GridPoint) -> Void
-    var onPanStatus: (String) -> Void
-    var onLayout: (String) -> Void
-
-    /// 格子之间的缝。墙色从缝里露出来。
-    private let gutter: CGFloat = 2
-    /// 再小就停住。放不下的部分靠双指看，不再缩小。
-    private let minimumCell: CGFloat = 28
-    /// 双指平移。单指不改它。换关时回到左上角。
-    @State private var pan: CGSize = .zero
-
-    var body: some View {
-        GeometryReader { geo in
-            let metrics = metrics(in: geo.size)
-            let status = panStatus(metrics)
-            let layout = layoutText(metrics, in: geo.size)
-            grid(metrics)
-                .offset(metrics.scrolls ? pan : .zero)
-                .frame(width: geo.size.width, height: geo.size.height, alignment: metrics.scrolls ? .topLeading : .center)
-                .clipped()
-                .overlay {
-                    SokobanBoardTouch(
-                        panEnabled: metrics.scrolls,
-                        pan: pan,
-                        layout: layout,
-                        onMove: onMove,
-                        onTap: onTap,
-                        onPan: { proposed in
-                            pan = clamped(proposed, metrics, in: geo.size)
-                        }
-                    )
-                }
-                .onChange(of: model.levelNumber) { _, _ in
-                    pan = .zero
-                }
-                .task(id: status) {
-                    onPanStatus(status)
-                }
-                .task(id: layout.label) {
-                    onLayout(layout.label)
-                }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityIdentifier("sokoban.board")
-        .accessibilityLabel("推箱子棋盘")
-        .accessibilityValue(model.token)
-    }
-
-    /// 模拟器核对平移。放得下是 off。停在 28pt 仍超出时是 on，后面是当前偏移。
-    private func panStatus(_ metrics: BoardMetrics) -> String {
-        guard metrics.scrolls else { return "off" }
-        return "on:\(Int(pan.width.rounded())):\(Int(pan.height.rounded()))"
-    }
-
-    /// 棋盘左上角和格子边长。点地用它判断手指落在哪一格，缝不算格子。
-    private func layoutText(_ metrics: BoardMetrics, in size: CGSize) -> SokobanBoardLayout {
-        let originX = metrics.scrolls ? pan.width : (size.width - metrics.boardWidth) / 2
-        let originY = metrics.scrolls ? pan.height : (size.height - metrics.boardHeight) / 2
-        let label = "cell:\(metrics.cell);ox:\(originX);oy:\(originY);gutter:\(gutter)"
-        return SokobanBoardLayout(
-            originX: originX,
-            originY: originY,
-            cell: metrics.cell,
-            gutter: gutter,
-            rows: model.rows,
-            cols: model.cols,
-            label: label
-        )
-    }
-
-    /// 双指不能把棋盘拖出空白。左上是 0，往右下看是负数。
-    private func clamped(_ proposed: CGSize, _ metrics: BoardMetrics, in size: CGSize) -> CGSize {
-        let maxX = max(0, metrics.boardWidth - size.width)
-        let maxY = max(0, metrics.boardHeight - size.height)
-        return CGSize(
-            width: min(0, max(-maxX, proposed.width)),
-            height: min(0, max(-maxY, proposed.height))
-        )
-    }
-
-    /// 能放下就放大到铺满。降到 28pt 仍放不下就停住，多出来的部分用双指看。
-    private func metrics(in size: CGSize) -> BoardMetrics {
-        let cols = CGFloat(max(model.cols, 1))
-        let rows = CGFloat(max(model.rows, 1))
-        let fitted = min(
-            (size.width - gutter * (cols - 1)) / cols,
-            (size.height - gutter * (rows - 1)) / rows
-        )
-        let cell = max(fitted, minimumCell)
-        let boardWidth = cell * cols + gutter * (cols - 1)
-        let boardHeight = cell * rows + gutter * (rows - 1)
-        let scrolls = boardWidth > size.width + 1 || boardHeight > size.height + 1
-        return BoardMetrics(cell: cell, boardWidth: boardWidth, boardHeight: boardHeight, scrolls: scrolls)
-    }
-
-    /// 按格子尺寸把整张图排出来。过渡中的人和箱子画在格子上面，避免被旁边的格子盖住。
-    private func grid(_ metrics: BoardMetrics) -> some View {
-        VStack(spacing: gutter) {
-            ForEach(0..<model.rows, id: \.self) { row in
-                HStack(spacing: gutter) {
-                    ForEach(0..<model.cols, id: \.self) { col in
-                        cellView(GridPoint(row: row, col: col))
-                            .frame(width: metrics.cell, height: metrics.cell)
-                    }
-                }
-            }
-        }
-        .frame(width: metrics.boardWidth, height: metrics.boardHeight)
-        .background(SokobanPalette.wall)
-        .overlay(alignment: .topLeading) {
-            movingPieces(metrics)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(SokobanPalette.wallEdge, lineWidth: 2)
-        }
-    }
-
-    /// 一格：墙或地板，地上的目标记号，再叠箱子和人。正在滑的棋子改由浮层画。
-    private func cellView(_ point: GridPoint) -> some View {
-        ZStack {
-            Rectangle()
-                .fill(model.walls.contains(point) ? SokobanPalette.wall : SokobanPalette.floor)
-            if model.targets.contains(point) {
-                SokobanTargetMark()
-            }
-            if drawnBoxes.contains(point), !hidesMovingBox(at: point) {
-                SokobanCrate()
-            }
-            if model.player == point, travel == nil {
-                SokobanPerson(facing: model.facing)
-            }
-        }
-    }
-
-    /// 这一格要画的箱子。路径播放用滑之前的位置，单步过渡用模型终局。
-    private var drawnBoxes: Set<GridPoint> {
-        playbackBoxes ?? model.boxes
-    }
-
-    /// 正在滑的箱子不留在格子里，改由浮层从原格画到新格。
-    private func hidesMovingBox(at point: GridPoint) -> Bool {
-        if playbackBoxes != nil {
-            return point == travel?.boxFrom || point == travel?.boxTo
-        }
-        return point == travel?.boxTo
-    }
-
-    /// 人和被推的箱子沿这一格移动。顶墙只移出 0.2 格再回来。
-    @ViewBuilder
-    private func movingPieces(_ metrics: BoardMetrics) -> some View {
-        if let travel {
-            if let boxFrom = travel.boxFrom, let boxTo = travel.boxTo {
-                SokobanCrate()
-                    .frame(width: metrics.cell, height: metrics.cell)
-                    .offset(pieceOffset(slide(travel, from: boxFrom, to: boxTo), metrics))
-            }
-            SokobanPerson(facing: travel.kind == .bump ? model.facing : travel.direction)
-                .frame(width: metrics.cell, height: metrics.cell)
-                .offset(pieceOffset(slide(travel, from: travel.from, to: travel.to), metrics))
-        }
-    }
-
-    /// 这一格在棋盘上的位置。走和推线性插值，顶墙前半出去、后半回来。
-    private func slide(_ travel: SokobanTravel, from: GridPoint, to: GridPoint) -> (row: CGFloat, col: CGFloat) {
-        switch travel.kind {
-        case .bump:
-            let out = progress < 0.5 ? progress / 0.5 : (1 - progress) / 0.5
-            let shift = 0.2 * out
-            return (CGFloat(from.row) + CGFloat(travel.direction.rowDelta) * shift, CGFloat(from.col) + CGFloat(travel.direction.colDelta) * shift)
-        case .walk, .push:
-            return (mix(CGFloat(from.row), CGFloat(to.row), progress), mix(CGFloat(from.col), CGFloat(to.col), progress))
-        }
-    }
-
-    /// 格子坐标换成棋盘左上角起算的偏移。缝也算进跨格的距离。
-    private func pieceOffset(_ cell: (row: CGFloat, col: CGFloat), _ metrics: BoardMetrics) -> CGSize {
-        let stride = metrics.cell + gutter
-        return CGSize(width: cell.col * stride, height: cell.row * stride)
-    }
-
-    private func mix(_ from: CGFloat, _ to: CGFloat, _ progress: CGFloat) -> CGFloat {
-        from + (to - from) * progress
-    }
-
-}
-
-/// 棋盘在点击区域里的位置。缝不属于相邻的格。
-struct SokobanBoardLayout: Equatable {
-    var originX: CGFloat
-    var originY: CGFloat
-    var cell: CGFloat
-    var gutter: CGFloat
-    var rows: Int
-    var cols: Int
-    var label: String
-
-    /// 点在格子里才返回。落在缝上、棋盘外，都是空。
-    func cell(at point: CGPoint) -> GridPoint? {
-        let x = point.x - originX
-        let y = point.y - originY
-        let stride = cell + gutter
-        guard stride > 0, x >= 0, y >= 0 else { return nil }
-        let col = Int(x / stride)
-        let row = Int(y / stride)
-        let localX = x - CGFloat(col) * stride
-        let localY = y - CGFloat(row) * stride
-        guard localX < cell, localY < cell else { return nil }
-        guard row >= 0, col >= 0, row < rows, col < cols else { return nil }
-        return GridPoint(row: row, col: col)
-    }
-}
-
-/// 棋盘上的手指。单指先到 24pt 的那一轴走一格；不到 24pt 且落在同一格才是点。
-private struct SokobanBoardTouch: UIViewRepresentable {
-    var panEnabled: Bool
-    var pan: CGSize
-    var layout: SokobanBoardLayout
-    var onMove: (SokobanDirection) -> Void
-    var onTap: (GridPoint) -> Void
-    var onPan: (CGSize) -> Void
-
-    func makeUIView(context: Context) -> UIView {
-        let view = UIView()
-        view.backgroundColor = .clear
-        view.isMultipleTouchEnabled = true
-        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        let one = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.oneFinger(_:)))
-        one.minimumNumberOfTouches = 1
-        one.maximumNumberOfTouches = 1
-        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.tap(_:)))
-        // 手指没移动时平移手势会失败，这时才算点。滑出去了就不点。
-        tap.require(toFail: one)
-        let two = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.twoFinger(_:)))
-        two.minimumNumberOfTouches = 2
-        two.maximumNumberOfTouches = 2
-        view.addGestureRecognizer(one)
-        view.addGestureRecognizer(tap)
-        view.addGestureRecognizer(two)
-        return view
-    }
-
-    func updateUIView(_ uiView: UIView, context: Context) {
-        context.coordinator.panEnabled = panEnabled
-        context.coordinator.pan = pan
-        context.coordinator.layout = layout
-        context.coordinator.onMove = onMove
-        context.coordinator.onTap = onTap
-        context.coordinator.onPan = onPan
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    /// 记下这一下手指有没有越过 24pt，以及双指开始时棋盘的位置。
-    final class Coordinator: NSObject {
-        var panEnabled = false
-        var pan: CGSize = .zero
-        var layout = SokobanBoardLayout(originX: 0, originY: 0, cell: 1, gutter: 2, rows: 0, cols: 0, label: "")
-        var onMove: (SokobanDirection) -> Void = { _ in }
-        var onTap: (GridPoint) -> Void = { _ in }
-        var onPan: (CGSize) -> Void = { _ in }
-        private var locked: SokobanDirection?
-        private var origin: CGSize = .zero
-        private var startCell: GridPoint?
-
-        /// 单指。先到 24pt 的轴在松手时走一格。不到 24pt 且起落在同一格，才是点地。
-        @objc func oneFinger(_ gesture: UIPanGestureRecognizer) {
-            if gesture.numberOfTouches > 1 {
-                locked = nil
-                startCell = nil
-                return
-            }
-            let translation = gesture.translation(in: gesture.view)
-            switch gesture.state {
-            case .began:
-                locked = nil
-                startCell = layout.cell(at: gesture.location(in: gesture.view))
-            case .changed:
-                guard locked == nil else { return }
-                // 同一采样里两轴都过了 24pt 时，取绝对值更大的那一轴。
-                if abs(translation.x) >= 24, abs(translation.x) >= abs(translation.y) {
-                    locked = translation.x > 0 ? .right : .left
-                } else if abs(translation.y) >= 24 {
-                    locked = translation.y > 0 ? .down : .up
-                }
-            case .ended:
-                if let locked {
-                    onMove(locked)
-                } else if hypot(translation.x, translation.y) < 24,
-                          let startCell,
-                          let endCell = layout.cell(at: gesture.location(in: gesture.view)),
-                          startCell == endCell {
-                    onTap(endCell)
-                }
-                locked = nil
-                startCell = nil
-            case .cancelled, .failed:
-                locked = nil
-                startCell = nil
-            default:
-                break
-            }
-        }
-
-        /// 几乎没移动的点。滑过 24pt 的那下不会进这里。
-        @objc func tap(_ gesture: UITapGestureRecognizer) {
-            guard let cell = layout.cell(at: gesture.location(in: gesture.view)) else { return }
-            onTap(cell)
-        }
-
-        /// 双指只平移。格子还没被 28pt 卡住时不改位置，也不走步。
-        @objc func twoFinger(_ gesture: UIPanGestureRecognizer) {
-            guard panEnabled else { return }
-            let translation = gesture.translation(in: gesture.view)
-            switch gesture.state {
-            case .began:
-                origin = pan
-            case .changed, .ended:
-                onPan(CGSize(width: origin.width + translation.x, height: origin.height + translation.y))
-            default:
-                break
-            }
-        }
-    }
-}
-
-/// 一局棋盘排出来之后的尺寸。
-private struct BoardMetrics {
-    var cell: CGFloat
-    var boardWidth: CGFloat
-    var boardHeight: CGFloat
-    var scrolls: Bool
-}
-
-/// 站着的人：头发、头、身体、两条腿。脸只表示朝向，不重画身体。
-struct SokobanPerson: View {
-    var facing: SokobanDirection = .down
-
-    var body: some View {
-        GeometryReader { geo in
-            let s = min(geo.size.width, geo.size.height)
-            ZStack {
-                Ellipse()
-                    .fill(Color.black.opacity(0.16))
-                    .frame(width: s * 0.46, height: s * 0.12)
-                    .offset(y: s * 0.38)
-                Capsule()
-                    .fill(SokobanPalette.playerLeg)
-                    .frame(width: s * 0.16, height: s * 0.28)
-                    .offset(x: -s * 0.12, y: s * 0.26)
-                Capsule()
-                    .fill(SokobanPalette.playerLeg)
-                    .frame(width: s * 0.16, height: s * 0.28)
-                    .offset(x: s * 0.12, y: s * 0.26)
-                RoundedRectangle(cornerRadius: s * 0.16, style: .continuous)
-                    .fill(SokobanPalette.player)
-                    .frame(width: s * 0.52, height: s * 0.34)
-                    .offset(y: s * 0.02)
-                Circle()
-                    .fill(SokobanPalette.skin)
-                    .frame(width: s * 0.40, height: s * 0.40)
-                    .offset(y: -s * 0.24)
-                SokobanFace(scale: s, facing: facing)
-                    .offset(y: -s * 0.24)
-                Capsule()
-                    .fill(SokobanPalette.hair)
-                    .frame(width: s * 0.40, height: facing == .up ? s * 0.36 : s * 0.18)
-                    .offset(y: facing == .up ? -s * 0.26 : -s * 0.36)
-            }
-            .frame(width: geo.size.width, height: geo.size.height)
-        }
-    }
-}
-
-/// 脸上的朝向。鼻子伸出头部轮廓，后脑不画五官。
-private struct SokobanFace: View {
-    var scale: CGFloat
-    var facing: SokobanDirection
-
-    var body: some View {
-        switch facing {
-        case .down:
-            ZStack {
-                eyes
-                nose
-                    .frame(width: max(4, scale * 0.10), height: max(6, scale * 0.18))
-                    .offset(y: scale * 0.18)
-            }
-        case .left:
-            side(noseSign: -1)
-        case .right:
-            side(noseSign: 1)
-        case .up:
-            Color.clear
-        }
-    }
-
-    /// 朝屏幕的两只眼睛。
-    private var eyes: some View {
-        HStack(spacing: scale * 0.08) {
-            Circle().frame(width: max(2, scale * 0.05), height: max(2, scale * 0.05))
-            Circle().frame(width: max(2, scale * 0.05), height: max(2, scale * 0.05))
-        }
-        .foregroundStyle(SokobanPalette.hair)
-        .offset(y: scale * 0.02)
-    }
-
-    /// 侧脸：一只眼睛，鼻子朝这一侧伸出轮廓。
-    private func side(noseSign: CGFloat) -> some View {
-        ZStack {
-            Circle()
-                .frame(width: max(2, scale * 0.05), height: max(2, scale * 0.05))
-                .foregroundStyle(SokobanPalette.hair)
-                .offset(x: noseSign * scale * 0.08, y: scale * 0.02)
-            nose
-                .frame(width: max(6, scale * 0.22), height: max(3, scale * 0.08))
-                .offset(x: noseSign * scale * 0.18)
-        }
-    }
-
-    /// 鼻子用深色，和肤色分开，缩小时仍能看出伸出的方向。
-    private var nose: some View {
-        Capsule().fill(SokobanPalette.hair)
-    }
-}
-
-/// 木箱：方盒、横板和一条竖带。轮廓是箱子，不是地上的叉号。
-struct SokobanCrate: View {
-    var body: some View {
-        GeometryReader { geo in
-            let s = min(geo.size.width, geo.size.height)
-            let inset = s * 0.16
-            ZStack {
-                Ellipse()
-                    .fill(Color.black.opacity(0.16))
-                    .frame(width: s * 0.62, height: s * 0.12)
-                    .offset(y: s * 0.36)
-                RoundedRectangle(cornerRadius: s * 0.06, style: .continuous)
-                    .fill(SokobanPalette.box)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: s * 0.06, style: .continuous)
-                            .strokeBorder(SokobanPalette.pieceEdge, lineWidth: max(2, s * 0.07))
-                    }
-                    .padding(inset)
-                VStack(spacing: s * 0.07) {
-                    Rectangle().frame(height: max(2, s * 0.045))
-                    Rectangle().frame(height: max(2, s * 0.045))
-                    Rectangle().frame(height: max(2, s * 0.045))
-                }
-                .foregroundStyle(SokobanPalette.pieceEdge)
-                .padding(.horizontal, inset + s * 0.05)
-                .padding(.vertical, inset + s * 0.07)
-                Rectangle()
-                    .fill(SokobanPalette.pieceEdge)
-                    .frame(width: max(2, s * 0.055))
-                    .padding(.vertical, inset + s * 0.03)
-            }
-        }
-    }
-}
-
-/// 地上的目标：一个叉号，没有体积，也不挡住箱子的轮廓。
-struct SokobanTargetMark: View {
-    var body: some View {
-        GeometryReader { geo in
-            let s = min(geo.size.width, geo.size.height)
-            Path { path in
-                let a = s * 0.08
-                let b = s * 0.92
-                path.move(to: CGPoint(x: a, y: a))
-                path.addLine(to: CGPoint(x: b, y: b))
-                path.move(to: CGPoint(x: b, y: a))
-                path.addLine(to: CGPoint(x: a, y: b))
-            }
-            .stroke(SokobanPalette.target, style: StrokeStyle(lineWidth: max(3, s * 0.11), lineCap: .round))
-        }
-    }
-}
-
-/// 棋盘下面的方向按钮。过关后变淡，点了也不会推动棋子，限制写在模型里。
-struct SokobanPad: View {
-    var locked: Bool
-    var onMove: (SokobanDirection) -> Void
-
-    var body: some View {
-        VStack(spacing: 8) {
-            key("上", "pad.up", .up)
-            HStack(spacing: 8) {
-                key("左", "pad.left", .left)
-                key("下", "pad.down", .down)
-                key("右", "pad.right", .right)
-            }
-        }
-        .opacity(locked ? 0.4 : 1)
-    }
-
-    /// 一颗方向键。白底深边，和页面底色分开。标识给模拟器检查用。
-    private func key(_ title: String, _ identifier: String, _ direction: SokobanDirection) -> some View {
-        Button {
-            onMove(direction)
-        } label: {
-            Text(title)
-                .font(.title3.bold())
-                .foregroundStyle(SokobanPalette.ink)
-                .frame(width: 76, height: 48)
-                .background(SokobanPalette.key, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(SokobanPalette.wallEdge, lineWidth: 2)
-                }
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier(identifier)
-    }
-}
-
-/// 推箱子自己的色块。不放到别的游戏里复用。
 enum SokobanPalette {
     static let wall = Color(red: 0.24, green: 0.16, blue: 0.12)
     static let wallEdge = Color(red: 0.16, green: 0.10, blue: 0.08)
     static let floor = Color(red: 0.96, green: 0.90, blue: 0.80)
-    static let target = Color(red: 0.78, green: 0.16, blue: 0.14)
+    static let target = Color(red: 66.0/255, green: 116.0/255, blue: 87.0/255)
     static let box = Color(red: 0.86, green: 0.55, blue: 0.24)
     static let pieceEdge = Color(red: 0.36, green: 0.20, blue: 0.08)
     static let player = Color(red: 0.12, green: 0.48, blue: 0.58)
@@ -1106,5 +1715,45 @@ enum SokobanPalette {
     static let skin = Color(red: 0.96, green: 0.78, blue: 0.62)
     static let hair = Color(red: 0.25, green: 0.16, blue: 0.12)
     static let key = Color.white
-    static let ink = Color(red: 0.12, green: 0.10, blue: 0.09)
+    static let ink = Color(red: 48.0/255, green: 44.0/255, blue: 35.0/255)
 }
+
+#if DEBUG
+/// Only synthetic, bounded UI sessions emit touch evidence. No production path/input.
+private enum SokobanGestureProbe {
+    static let logger = Logger(subsystem: "practice.classicgames.sokoban.gestureprobe", category: "touch")
+    static func emit(_ text: @autoclosure () -> String) {
+        guard SokobanTestSession.active != nil else { return }
+        let value = text()
+        logger.notice("\(value, privacy: .public)")
+    }
+}
+#endif
+
+#if DEBUG
+/// Hidden, non-visible hook channel for isolated UI tests. No user-facing
+/// "隔离测试" entry is shown in production or the test package.
+enum SokobanTestHooks {
+    static let prefix = "practice.classicgames.sokoban.test."
+    static var handler: ((String) -> Void)?
+    private static var installed = false
+    private static let callback: CFNotificationCallback = { _, _, name, _, _ in
+        guard let name else { return }
+        let raw = name.rawValue as String
+        guard raw.hasPrefix(SokobanTestHooks.prefix) else { return }
+        let command = String(raw.dropFirst(SokobanTestHooks.prefix.count))
+        DispatchQueue.main.async { SokobanTestHooks.handler?(command) }
+    }
+    static func install(_ handler: @escaping (String) -> Void) {
+        self.handler = handler
+        guard !installed else { return }
+        installed = true
+        let commands = SokobanFaultStorage.Mode.allCasesForUI.map { "fault." + $0.rawValue } + ["retry", "corrupt", "undo", "redo"]
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        for command in commands {
+            CFNotificationCenterAddObserver(center, nil, callback, (prefix + command) as CFString, nil, .deliverImmediately)
+        }
+    }
+}
+#endif
+

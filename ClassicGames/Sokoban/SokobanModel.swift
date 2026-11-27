@@ -1,42 +1,55 @@
 import Foundation
 import Observation
 
-/// 每一关自己的最少步数。键带关卡号，重开和返回都不清。
+/// Picker compatibility facade. New records are versioned; old defaults are read
+/// separately as historical data and are never promoted to these fair records.
+@MainActor
 enum SokobanRecords {
-    /// 没有纪录时返回空。0 是合法成绩，和还没过关分开。
-    static func best(level: Int) -> Int? {
-        let key = storageKey(level)
-        guard UserDefaults.standard.object(forKey: key) != nil else { return nil }
-        return UserDefaults.standard.integer(forKey: key)
-    }
-
-    /// 这一段里已经写下最少步数的关数。没有数字不算已过。
+    static func best(level: Int) -> Int? { SokobanPersistence.shared.best(level: level) }
     static func clearedCount(from start: Int, through end: Int) -> Int {
-        (start...end).reduce(0) { count, level in
-            count + (best(level: level) == nil ? 0 : 1)
-        }
+        (start...end).filter { best(level: $0) != nil }.count
     }
+    static func inProgressSummary() -> (level: Int, steps: Int)? {
+        let persistence = SokobanPersistence.shared
+        guard let level = persistence.recentLevel(),
+              let game = try? persistence.game(level: level),
+              let parsed = SokobanResume.parse(game.raw), parsed.won == false else { return nil }
+        return (level, parsed.steps)
+    }
+    static func inProgressSteps(level: Int) -> Int? {
+        guard let game = try? SokobanPersistence.shared.game(level: level),
+              let parsed = SokobanResume.parse(game.raw), parsed.won == false, parsed.steps > 0 else { return nil }
+        return parsed.steps
+    }
+    static func historicalBest(level: Int) -> Int? {
+        SokobanPersistence.shared.historicalBest(level: level)
+    }
+}
 
-    /// 只有更少的步数才替换这一关的纪录。
-    @discardableResult
-    static func record(level: Int, steps: Int) -> Int {
-        if let best = best(level: level), steps >= best {
-            return best
-        }
-        UserDefaults.standard.set(steps, forKey: storageKey(level))
-        return steps
-    }
-
-    /// 和总纪录用同一前缀，检查时清掉推箱子会把各关一起清掉。
-    private static func storageKey(_ level: Int) -> String {
-        "classicgames.best.sokoban.\(level)"
-    }
+enum SokobanVisitKind: String { case playing, completedNow, completedRevisit, scoreOnly, recovery }
+enum SokobanCompletionKind: String { case first, newRecord, tie, normal, lastNotAll, campaign }
+enum SokobanLaunchIntent {
+    static var openPickerOnAppear = false
 }
 
 /// 推箱子这一局的状态。管当前关的走动、过关和换关，不改别的关的纪录。
 @MainActor
 @Observable
 final class SokobanModel {
+    private(set) var visitKind: SokobanVisitKind = .playing
+    private(set) var completionEvents = 0
+    private(set) var lastCompletionKind: SokobanCompletionKind?
+    var hasBoard: Bool { visitKind != .scoreOnly && loadIssue.isEmpty }
+    var isReadOnlyCompletion: Bool { visitKind == .completedRevisit || visitKind == .scoreOnly }
+    var isCampaignComplete: Bool { persistence.isCampaignComplete() }
+    var completionTitle: String {
+        Self.completionTitle(isReadOnly: isReadOnlyCompletion, won: won, isCampaignComplete: isCampaignComplete)
+    }
+    static func completionTitle(isReadOnly: Bool, won: Bool, isCampaignComplete: Bool) -> String {
+        if isReadOnly { return "已通关" }
+        if !won { return "推箱子" }
+        return isCampaignComplete ? "全部完成" : "过关"
+    }
     private(set) var levelNumber = 1
     private(set) var rows = 0
     private(set) var cols = 0
@@ -53,37 +66,46 @@ final class SokobanModel {
     private(set) var winCounts = false
     /// 提示行。没有提示时是空字符串。
     private(set) var notice = ""
+    /// 最近一次结算（含不发奖的看解通关）。开局、重开、换关时清空。
+    private(set) var lastSettlement: SokobanSettlement?
+    var coins: Int { persistence.wallet.coins }
+    var undoItemCount: Int { persistence.wallet.undoItemCount }
+    var hintItemCount: Int { persistence.wallet.hintItemCount }
+    var parSteps: Int { SokobanReferenceSolutions.parSteps(levelId: levelNumber) }
+    var bestStars: Int { persistence.bestStars(level: levelNumber) }
+    var totalStars: Int { persistence.totalStars() }
+    var claimedStarTier: Int { persistence.wallet.claimed(level: levelNumber) }
+    var persistenceWallet: SokobanWallet { persistence.wallet }
+    func persistenceBestStars(level: Int) -> Int { persistence.bestStars(level: level) }
+    @discardableResult
+    func purchase(_ item: SokobanShopItem) -> Bool { persistence.purchase(item) }
+    func noticeHintFail(_ message: String) { notice = message }
 
     private var initialBoxes: Set<GridPoint> = []
     private var initialPlayer = GridPoint(row: 0, col: 0)
     private var undoStack: [SokobanFrame] = []
     private var redoStack: [SokobanFrame] = []
-    /// 中途局面。和最高纪录、每关最少步数都不是同一个键。
-    private static let resumeKey = "classicgames.sokoban.resume"
-    /// 启动参数只在这一进程里生效一次。返回后再进入不能把刚写下的局面清掉。
-    private static var didHonorResetArgument = false
+    private let persistence: SokobanPersistence
+    private var recordEligible = true
+    private(set) var loadIssue = ""
+    var hasUnverifiedPredecessor: Bool { persistence.hasUnverifiedPredecessor(level: levelNumber) }
+    private var unverifiedRecordNotice: String { "原存档已隔离保留，原纪录暂无法核实。" }
+    var saveState: SokobanSaveState? { persistence.states[levelNumber] }
+    var legacyMigration: SokobanMigrationResult { persistence.migrationResult }
+    var historicalBest: Int? { persistence.historicalBest(level: levelNumber) }
 
-    init() {
-        let arguments = ProcessInfo.processInfo.arguments
-        if !Self.didHonorResetArgument {
-            Self.didHonorResetArgument = true
-            if let index = arguments.firstIndex(of: "-reset-game"),
-               arguments.indices.contains(index + 1),
-               arguments[index + 1] == GameID.sokoban.rawValue {
-                UserDefaults.standard.removeObject(forKey: Self.resumeKey)
-            }
-        }
-        let injected = arguments.firstIndex(of: "-sokoban-resume").flatMap { index -> String? in
-            arguments.indices.contains(index + 1) ? arguments[index + 1] : nil
-        }
-        let stored = injected ?? UserDefaults.standard.string(forKey: Self.resumeKey)
-        if let stored {
-            if !applyResume(stored) {
-                load(1, persist: true)
-            }
-            return
-        }
-        load(1, persist: false)
+    init(persistence: SokobanPersistence? = nil) {
+        self.persistence = persistence ?? .shared
+        self.persistence.migrateLegacy()
+        load(self.persistence.recentLevel() ?? 1, persist: false)
+    }
+
+    @discardableResult
+    func retrySave() -> Bool {
+        let saved = persistence.retry(level: levelNumber)
+        levelBest = persistence.best(level: levelNumber)
+        if hasUnverifiedPredecessor { notice = unverifiedRecordNotice }
+        return saved
     }
 
     /// 走一步。顶墙、顶箱子但箱子前方走不通，都不算步。过关后不再移动。成功才记入撤销。
@@ -91,10 +113,41 @@ final class SokobanModel {
         _ = step(direction, countsOnWin: true)
     }
 
+    /// 这一格能不能走（与 `move` 同一套规则，不改局面）。方向键连发撞墙/顶死时立刻停。
+    func canMove(_ direction: SokobanDirection) -> Bool {
+        guard !isReadOnlyCompletion, loadIssue.isEmpty, !won else { return false }
+        let next = player.moving(direction)
+        guard contains(next), !walls.contains(next) else { return false }
+        if boxes.contains(next) {
+            let beyond = next.moving(direction)
+            guard contains(beyond), !walls.contains(beyond), !boxes.contains(beyond) else { return false }
+        }
+        return true
+    }
+
+    enum UndoRequest: Equatable { case undone, empty, needsShop, blocked }
+
+    /// 产品撤销：有步才扣 1 张撤销券；0 步不扣；有步但券为 0 时交给兑换弹层。
+    @discardableResult
+    func requestUndo() -> UndoRequest {
+        guard !isReadOnlyCompletion, loadIssue.isEmpty else { return .blocked }
+        guard !undoStack.isEmpty, steps > 0 else { return .empty }
+        guard persistence.wallet.undoItemCount > 0 else { return .needsShop }
+        guard persistence.consumeUndoTicket() else { return .needsShop }
+        return undo() ? .undone : .blocked
+    }
+
+    /// 确认已有可执行提示序列后扣 1 个提示道具。后续手动撤销不退。
+    @discardableResult
+    func beginHintPlayback(_ moves: [SokobanDirection]) -> Bool {
+        guard !moves.isEmpty, !isReadOnlyCompletion, loadIssue.isEmpty, !won else { return false }
+        return persistence.consumeHintItem()
+    }
+
     /// 退回上一格。栈空或已经是开局则不变。不改纪录，也不换关。
     @discardableResult
     func undo() -> Bool {
-        guard let previous = undoStack.popLast() else { return false }
+        guard !isReadOnlyCompletion, loadIssue.isEmpty, let previous = undoStack.popLast() else { return false }
         redoStack.append(currentFrame)
         restore(previous)
         persist()
@@ -105,7 +158,7 @@ final class SokobanModel {
     /// 把刚撤销的那一格放回来。没有可重做的步则不变。
     @discardableResult
     func redo() -> Bool {
-        guard let next = redoStack.popLast() else { return false }
+        guard !isReadOnlyCompletion, loadIssue.isEmpty, let next = redoStack.popLast() else { return false }
         undoStack.append(currentFrame)
         restore(next)
         persist()
@@ -116,7 +169,7 @@ final class SokobanModel {
     /// 成功的一格。先记下走之前的局面，再改人和箱子。过关且参加比较时才写本关纪录。
     @discardableResult
     private func step(_ direction: SokobanDirection, countsOnWin: Bool) -> Bool {
-        guard !won else { return false }
+        guard !isReadOnlyCompletion, loadIssue.isEmpty, !won else { return false }
         let next = player.moving(direction)
         guard contains(next), !walls.contains(next) else { return false }
         var nextBoxes = boxes
@@ -133,19 +186,30 @@ final class SokobanModel {
         player = next
         steps += 1
         if boxes == targets {
+            let priorBest = levelBest
             won = true
-            winCounts = countsOnWin
-            if countsOnWin {
-                levelBest = SokobanRecords.record(level: levelNumber, steps: steps)
-            }
+            visitKind = .completedNow
+            completionEvents += 1
+            winCounts = countsOnWin && recordEligible
+            persist()
+            if isCampaignComplete { lastCompletionKind = .campaign }
+            else if levelNumber == SokobanLevels.count { lastCompletionKind = .lastNotAll }
+            else if priorBest == nil { lastCompletionKind = .first }
+            else if steps < priorBest! { lastCompletionKind = .newRecord }
+            else if steps == priorBest! { lastCompletionKind = .tie }
+            else { lastCompletionKind = .normal }
+            lastSettlement = persistence.applyClearReward(level: levelNumber, steps: steps, counts: winCounts)
+        } else {
+            persist()
         }
-        persist()
         notice = ""
         return true
     }
 
+    #if SWIFT_PACKAGE
     /// 按官方解走出下一步。没有解、已经偏离或这一步走不通时，局面不变。
     func hint() -> SokobanStep? {
+        guard !isReadOnlyCompletion, loadIssue.isEmpty else { return nil }
         guard let solution = SokobanSolutions.directions(level: levelNumber) else {
             notice = "这一关没有解"
             return nil
@@ -157,6 +221,7 @@ final class SokobanModel {
         }
         let direction = solution[taken.count]
         let boxesBefore = boxes
+        recordEligible = false
         guard step(direction, countsOnWin: true) else {
             notice = "这一步没有提示"
             return nil
@@ -166,11 +231,15 @@ final class SokobanModel {
 
     /// 回到这一关开局再逐格走出官方解。没有解串时局面不变。看解的过关不写纪录。
     func showSolution() -> SokobanPlayback {
+        guard !isReadOnlyCompletion, loadIssue.isEmpty else {
+            return SokobanPlayback(steps: [], player: player, boxes: boxes, stepsAtStart: steps)
+        }
         guard let solution = SokobanSolutions.directions(level: levelNumber) else {
             notice = "这一关没有解"
             return SokobanPlayback(steps: [], player: player, boxes: boxes, stepsAtStart: steps)
         }
         restart()
+        recordEligible = false
         let originPlayer = player
         let originBoxes = boxes
         var taken: [SokobanStep] = []
@@ -207,12 +276,15 @@ final class SokobanModel {
         return solution.starts(with: taken)
     }
 
+    #endif
+
     /// 走之前的一帧。撤销和重做只换这帧，不写纪录。
     private var currentFrame: SokobanFrame {
         SokobanFrame(player: player, boxes: boxes, steps: steps, facing: facing, won: won, counts: winCounts)
     }
 
     /// 把人和箱子、步数、朝向、过关放回这一帧。
+
     private func restore(_ frame: SokobanFrame) {
         player = frame.player
         boxes = frame.boxes
@@ -220,9 +292,11 @@ final class SokobanModel {
         facing = frame.facing
         won = frame.won
         winCounts = frame.counts
+        visitKind = frame.won ? .completedNow : .playing
     }
 
     /// 点到一格。先走不推箱子的最短路；没有这种路才沿直线推开挡路的箱子。走不到就完全不变。
+    #if SWIFT_PACKAGE
     /// 返回的每一格给画面接着播，模型在返回前已经停在终局。
     func walkTo(_ target: GridPoint) -> [SokobanStep] {
         guard !won else { return [] }
@@ -305,21 +379,30 @@ final class SokobanModel {
         return directions.isEmpty ? nil : directions
     }
 
+    #endif
+
     /// 人和箱子回到这一关的原位，步数归零。不改已经写下的纪录，也不换关。这一关的撤销和重做都空。
     func restart() {
+        do { try persistence.prepareRestart(level: levelNumber) }
+        catch { notice = "重开失败，当前局面已保留"; return }
+        loadIssue = ""
+        visitKind = .playing
+        recordEligible = true
         boxes = initialBoxes
         player = initialPlayer
         steps = 0
         won = false
         facing = .down
         winCounts = false
+        lastCompletionKind = nil
+        lastSettlement = nil
         undoStack.removeAll()
         redoStack.removeAll()
         notice = ""
         persist()
     }
 
-    /// 打开编号对应的关。这一局丢掉，各关纪录保留，并写下这一关的开局。
+    /// 打开该关的独立存档；失败写入的最新局面仍由持久化层保留。
     func load(_ number: Int) {
         load(number, persist: true)
     }
@@ -344,15 +427,31 @@ final class SokobanModel {
         undoStack.removeAll()
         redoStack.removeAll()
         notice = ""
-        levelBest = SokobanRecords.best(level: clamped)
-        if shouldPersist {
-            persist()
-        }
+        loadIssue = ""
+        recordEligible = true
+        visitKind = .playing
+        lastCompletionKind = nil
+        lastSettlement = nil
+        levelBest = persistence.best(level: clamped)
+        do {
+            if let saved = try persistence.game(level: clamped) {
+                if saved.recordOnly == true {
+                    visitKind = .scoreOnly
+                } else {
+                    guard applyResume(saved.raw) else { throw SokobanSaveError.corrupt }
+                    if won { visitKind = .completedRevisit }
+                }
+                recordEligible = saved.eligible
+                if saved.recordRecoveryPending == true { notice = unverifiedRecordNotice }
+            }
+            // Reopening terminal/score-only data is a read, not another win or save.
+            if shouldPersist && !isReadOnlyCompletion { persist() }
+        } catch { loadIssue = String(describing: error); visitKind = .recovery }
     }
 
     /// 过关后进入下一关。还没过关，或已经是最后一关，就停在原地。
     func advance() {
-        guard won, levelNumber < SokobanLevels.count else { return }
+        guard won, visitKind == .completedNow, levelNumber < SokobanLevels.count else { return }
         load(levelNumber + 1)
     }
 
@@ -366,7 +465,8 @@ final class SokobanModel {
         return "level:\(levelNumber);player:\(player.row),\(player.col);boxes:\(boxText);steps:\(steps);won:\(won);face:\(facing.name)"
     }
 
-    /// 把当前局面写进 UserDefaults。不写最高纪录，也不写每关最少步数。
+    /// 将完整历史交给分关版本文件存档；合法且公平的通关同时更新该版本最少步数。
+    /// 不改旧版 UserDefaults 原档、历史纪录或其他游戏纪录。
     private func persist() {
         let text = SokobanResume.encode(
             level: levelNumber,
@@ -379,12 +479,14 @@ final class SokobanModel {
             undo: undoStack,
             redo: redoStack
         )
-        UserDefaults.standard.set(text, forKey: Self.resumeKey)
+        persistence.save(level: levelNumber, raw: text, eligible: recordEligible)
+        levelBest = persistence.best(level: levelNumber)
+        if hasUnverifiedPredecessor { notice = unverifiedRecordNotice }
     }
 
-    /// 读回一局。关号、朝向或箱子数量不对就拒绝，调用方改回第 1 关开局。不写纪录。
+    /// 只恢复身份与完整历史均已验证的新槽；拒绝时阻止输入，不静默覆盖。
     private func applyResume(_ raw: String) -> Bool {
-        guard let parsed = SokobanResume.parse(raw) else { return false }
+        guard let parsed = SokobanPersistence.validated(raw, level: levelNumber) else { return false }
         let level = SokobanLevel.parsed(parsed.level)
         let boxCount = level.boxes.count
         guard parsed.boxes.count == boxCount,
@@ -405,7 +507,7 @@ final class SokobanModel {
         winCounts = parsed.counts
         undoStack = parsed.undo
         redoStack = parsed.redo
-        levelBest = SokobanRecords.best(level: parsed.level)
+        levelBest = persistence.best(level: parsed.level)
         return true
     }
 
@@ -415,7 +517,7 @@ final class SokobanModel {
 }
 
 /// 走之前的局面。过关标记只说明这一帧是否已经过关，以及这次过关要不要参加纪录比较。
-private struct SokobanFrame {
+struct SokobanFrame {
     var player: GridPoint
     var boxes: Set<GridPoint>
     var steps: Int
@@ -467,7 +569,7 @@ extension Array where Element == SokobanDirection {
 }
 
 /// 中途局面编成一行。字段用竖线分开，栈里的每一帧用分号分开。
-private enum SokobanResume {
+enum SokobanResume {
     struct Parsed {
         var level: Int
         var player: GridPoint
@@ -580,7 +682,7 @@ private enum SokobanResume {
         var points: Set<GridPoint> = []
         for piece in raw.split(separator: "+", omittingEmptySubsequences: false) {
             guard let point = point(String(piece)) else { return nil }
-            points.insert(point)
+            guard points.insert(point).inserted else { return nil }
         }
         return points
     }

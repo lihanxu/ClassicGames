@@ -1,0 +1,65 @@
+{
+  "images": [
+    {
+      "filename": "hud_coin_capsule@1x.png",
+      "idiom": "universal",
+      "scale": "1x",
+      "resizing": {
+        "cap-insets": {
+          "top": 12,
+          "left": 18,
+          "bottom": 14,
+          "right": 18
+        },
+        "center": {
+          "mode": "fill",
+          "width": 74,
+          "height": 11
+        },
+        "mode": "9-slice"
+      }
+    },
+    {
+      "filename": "hud_coin_capsule@2x.png",
+      "idiom": "universal",
+      "scale": "2x",
+      "resizing": {
+        "cap-insets": {
+          "top": 24,
+          "left": 36,
+          "bottom": 28,
+          "right": 36
+        },
+        "center": {
+          "mode": "fill",
+          "width": 148,
+          "height": 21
+        },
+        "mode": "9-slice"
+      }
+    },
+    {
+      "filename": "hud_coin_capsule@3x.png",
+      "idiom": "universal",
+      "scale": "3x",
+      "resizing": {
+        "cap-insets": {
+          "top": 36,
+          "left": 54,
+          "bottom": 42,
+          "right": 54
+        },
+        "center": {
+          "mode": "fill",
+          "width": 222,
+          "height": 32
+        },
+        "mode": "9-slice"
+      }
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

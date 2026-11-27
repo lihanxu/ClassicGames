@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FB0123456789ABCDEF000003 /* SokobanPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF000004 /* SokobanPresentation.swift */; };
+		FB0123456789ABCDEF000001 /* SokobanPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF000002 /* SokobanPersistence.swift */; };
+		FB0123456789ABCDEF000011 /* SokobanReferenceSolutions.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF000010 /* SokobanReferenceSolutions.swift */; };
+		FB0123456789ABCDEF000013 /* SokobanScoring.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF000012 /* SokobanScoring.swift */; };
+		FB0123456789ABCDEF000015 /* SokobanReplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF000014 /* SokobanReplay.swift */; };
+		FB0123456789ABCDEF000017 /* SokobanHintSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF000016 /* SokobanHintSearch.swift */; };
+		FB0123456789ABCDEF000019 /* SokobanDPadRepeat.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF000018 /* SokobanDPadRepeat.swift */; };
+		FB0123456789ABCDEF00001B /* SokobanV4Chrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0123456789ABCDEF00001A /* SokobanV4Chrome.swift */; };
 		01109B445F364DC54C3ABE93 /* SnakeScreen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 942611E8DDDFED1D5E6B0BEA /* SnakeScreen.swift */; };
 		04C50C5E0DFD6DA82FCE646A /* Game2048Screen.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F105BE084E059E2B308E31C /* Game2048Screen.swift */; };
 		10C1F24A8BB7FC2910683519 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8912F92D06E6FDCA72CACEF8 /* HomeView.swift */; };
@@ -22,6 +30,8 @@
 		57184E2D5AA0D334C557BD0E /* SokobanUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 811CB43C6A891757AB7C8AA8 /* SokobanUITests.swift */; };
 		5AF45485738E6DF5D4DA2833 /* GameID.swift in Sources */ = {isa = PBXBuildFile; fileRef = 151B46DC900B1EB04D670FC3 /* GameID.swift */; };
 		5F0665818AA21457817FA17A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 799C674A18DB8F0EE73097A1 /* Assets.xcassets */; };
+		B81F0E2D4C6B8A90E1D2C3F4 /* ZCOOLKuaiLe-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A81F0E2D4C6B8A90E1D2C3F4 /* ZCOOLKuaiLe-Regular.ttf */; };
+		B81F0E2D4C6B8A90E1D2C3F5 /* ZCOOLKuaiLe-OFL.txt in Resources */ = {isa = PBXBuildFile; fileRef = A81F0E2D4C6B8A90E1D2C3F5 /* ZCOOLKuaiLe-OFL.txt */; };
 		6E553DDCF0ACA71775EF90D6 /* Phase2UITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07AAA1BCA11FF9E388EC1354 /* Phase2UITests.swift */; };
 		70FADE688B22D61D4AC9F7C8 /* PlatformerUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E56EA98673C553C41F1021C /* PlatformerUITests.swift */; };
 		73A42C6875966935B8988BBA /* Game2048Model.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8DBAD899AA4491C929F046 /* Game2048Model.swift */; };
@@ -63,6 +73,14 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		FB0123456789ABCDEF000004 /* SokobanPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanPresentation.swift; sourceTree = "<group>"; };
+		FB0123456789ABCDEF000002 /* SokobanPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanPersistence.swift; sourceTree = "<group>"; };
+		FB0123456789ABCDEF000010 /* SokobanReferenceSolutions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanReferenceSolutions.swift; sourceTree = "<group>"; };
+		FB0123456789ABCDEF000012 /* SokobanScoring.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanScoring.swift; sourceTree = "<group>"; };
+		FB0123456789ABCDEF000014 /* SokobanReplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanReplay.swift; sourceTree = "<group>"; };
+		FB0123456789ABCDEF000016 /* SokobanHintSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanHintSearch.swift; sourceTree = "<group>"; };
+		FB0123456789ABCDEF000018 /* SokobanDPadRepeat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanDPadRepeat.swift; sourceTree = "<group>"; };
+		FB0123456789ABCDEF00001A /* SokobanV4Chrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanV4Chrome.swift; sourceTree = "<group>"; };
 		051F1F4DC5274C89E9B2F615 /* GameFrame.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameFrame.swift; sourceTree = "<group>"; };
 		07AAA1BCA11FF9E388EC1354 /* Phase2UITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Phase2UITests.swift; sourceTree = "<group>"; };
 		08A9670F1C228B7C0729425B /* SokobanModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanModel.swift; sourceTree = "<group>"; };
@@ -83,6 +101,8 @@
 		6C46BD0A48EBCFD1158FCD53 /* Game2048UITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Game2048UITests.swift; sourceTree = "<group>"; };
 		6F105BE084E059E2B308E31C /* Game2048Screen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Game2048Screen.swift; sourceTree = "<group>"; };
 		799C674A18DB8F0EE73097A1 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A81F0E2D4C6B8A90E1D2C3F4 /* ZCOOLKuaiLe-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "ZCOOLKuaiLe-Regular.ttf"; path = "Fonts/ZCOOLKuaiLe-Regular.ttf"; sourceTree = "<group>"; };
+		A81F0E2D4C6B8A90E1D2C3F5 /* ZCOOLKuaiLe-OFL.txt */ = {isa = PBXFileReference; lastKnownFileType = text; name = "ZCOOLKuaiLe-OFL.txt"; path = "Fonts/ZCOOLKuaiLe-OFL.txt"; sourceTree = "<group>"; };
 		811431B20EC427081176CAB5 /* ClassicGames.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClassicGames.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		811CB43C6A891757AB7C8AA8 /* SokobanUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SokobanUITests.swift; sourceTree = "<group>"; };
 		8641CEDA59F106EE2A9359D5 /* AppRouter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRouter.swift; sourceTree = "<group>"; };
@@ -115,6 +135,8 @@
 			isa = PBXGroup;
 			children = (
 				799C674A18DB8F0EE73097A1 /* Assets.xcassets */,
+				A81F0E2D4C6B8A90E1D2C3F4 /* ZCOOLKuaiLe-Regular.ttf */,
+				A81F0E2D4C6B8A90E1D2C3F5 /* ZCOOLKuaiLe-OFL.txt */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -199,6 +221,14 @@
 				CF656AFFC7EA4D48150F8F42 /* SokobanLevel.swift */,
 				F4C8A91E2B7D4A60C5E13F88 /* SokobanLevels.swift */,
 				08A9670F1C228B7C0729425B /* SokobanModel.swift */,
+				FB0123456789ABCDEF000002 /* SokobanPersistence.swift */,
+				FB0123456789ABCDEF000010 /* SokobanReferenceSolutions.swift */,
+				FB0123456789ABCDEF000012 /* SokobanScoring.swift */,
+				FB0123456789ABCDEF000014 /* SokobanReplay.swift */,
+				FB0123456789ABCDEF000016 /* SokobanHintSearch.swift */,
+				FB0123456789ABCDEF000018 /* SokobanDPadRepeat.swift */,
+				FB0123456789ABCDEF00001A /* SokobanV4Chrome.swift */,
+				FB0123456789ABCDEF000004 /* SokobanPresentation.swift */,
 				E7C4A91B2D8F4E60A1B5C3D9 /* SokobanAudio.swift */,
 				0C2997DBF26264D106345033 /* SokobanScreen.swift */,
 			);
@@ -354,6 +384,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				5F0665818AA21457817FA17A /* Assets.xcassets in Resources */,
+				B81F0E2D4C6B8A90E1D2C3F4 /* ZCOOLKuaiLe-Regular.ttf in Resources */,
+				B81F0E2D4C6B8A90E1D2C3F5 /* ZCOOLKuaiLe-OFL.txt in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -411,6 +443,14 @@
 				20F1B162596EA9D1FE879F6B /* SokobanLevel.swift in Sources */,
 				A9D0E71B3C6F4825D4A8B190 /* SokobanLevels.swift in Sources */,
 				D0DDA09767016220CBEDA199 /* SokobanModel.swift in Sources */,
+				FB0123456789ABCDEF000001 /* SokobanPersistence.swift in Sources */,
+				FB0123456789ABCDEF000011 /* SokobanReferenceSolutions.swift in Sources */,
+				FB0123456789ABCDEF000013 /* SokobanScoring.swift in Sources */,
+				FB0123456789ABCDEF000015 /* SokobanReplay.swift in Sources */,
+				FB0123456789ABCDEF000017 /* SokobanHintSearch.swift in Sources */,
+				FB0123456789ABCDEF000019 /* SokobanDPadRepeat.swift in Sources */,
+				FB0123456789ABCDEF00001B /* SokobanV4Chrome.swift in Sources */,
+				FB0123456789ABCDEF000003 /* SokobanPresentation.swift in Sources */,
 				9F2E6B80C4A14D73B8E5F021 /* SokobanAudio.swift in Sources */,
 				883547DE80878B248846A20E /* SokobanScreen.swift in Sources */,
 			);
@@ -485,11 +525,14 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "经典小游戏";
+				INFOPLIST_KEY_UIAppFonts = (
+					"ZCOOLKuaiLe-Regular.ttf",
+				);
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
@@ -513,10 +556,15 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 5S6DCB24V8;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ClassicGames/Resources/UIAppFonts.plist;
+				INFOPLIST_KEY_UIAppFonts = (
+					"ZCOOLKuaiLe-Regular.ttf",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = practice.classicgames.app;
 				PRODUCT_NAME = ClassicGames;
@@ -531,7 +579,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -549,7 +597,7 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -569,10 +617,15 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = 5S6DCB24V8;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = ClassicGames/Resources/UIAppFonts.plist;
+				INFOPLIST_KEY_UIAppFonts = (
+					"ZCOOLKuaiLe-Regular.ttf",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = practice.classicgames.app;
 				PRODUCT_NAME = ClassicGames;
@@ -634,11 +687,14 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = "经典小游戏";
+				INFOPLIST_KEY_UIAppFonts = (
+					"ZCOOLKuaiLe-Regular.ttf",
+				);
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;

@@ -3,10 +3,12 @@ import XCTest
 /// 阶段 1 总检查：四款都能结束并重开，较差的推箱子成绩不覆盖纪录，关掉 App 后纪录还在。
 final class Phase1UITests: XCTestCase {
     private var app = XCUIApplication()
+    private let sokobanNamespace = "sokoban.ui." + UUID().uuidString.lowercased()
 
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        app.launchEnvironment["CLASSICGAMES_SOKOBAN_TEST_NAMESPACE"] = sokobanNamespace
         app.launchArguments = ["-ui-testing", "-reset-scores"]
         app.launch()
     }
@@ -17,16 +19,18 @@ final class Phase1UITests: XCTestCase {
         }
         Screenshot.save("08-home-four.png")
 
-        let sokobanBest = clearSokobanTwice()
+        clearSokobanTwice()
         let snakeBest = finishSnake()
         let breakoutBest = finishBreakout()
         let game2048Best = finish2048()
 
         app.terminate()
+        app.launchEnvironment["CLASSICGAMES_SOKOBAN_TEST_NAMESPACE"] = sokobanNamespace
         app.launchArguments = ["-ui-testing"]
         app.launch()
         XCTAssertTrue(app.staticTexts["推箱子"].waitForExistence(timeout: 8))
-        XCTAssertEqual(app.staticTexts["home.best.sokoban"].label, "最高 \(sokobanBest)")
+        // 首页推箱子主卡展示已通关关数；33 步纪录仍由局内「最高纪录」断言覆盖。
+        XCTAssertEqual(app.staticTexts["home.best.sokoban"].label, "已通关 1/100")
         XCTAssertEqual(app.staticTexts["home.best.snake"].label, "最高 \(snakeBest)")
         XCTAssertEqual(app.staticTexts["home.best.breakout"].label, "最高 \(breakoutBest)")
         XCTAssertEqual(app.staticTexts["home.best.game2048"].label, "最高 \(game2048Best)")
@@ -39,15 +43,16 @@ final class Phase1UITests: XCTestCase {
         let board = app.descendants(matching: .any)["sokoban.board"]
         XCTAssertTrue(board.waitForExistence(timeout: 5))
         playSokoban(SokobanMoves.short)
-        XCTAssertTrue(app.staticTexts["过关"].waitForExistence(timeout: 2))
-        XCTAssertEqual(app.staticTexts["chrome.best"].label, "最高纪录 33")
+        XCTAssertTrue(app.staticTexts["过关"].waitForExistence(timeout: 5))
+        // 推箱子局内纪录在 sokoban.best，文案为「本关纪录」，与原先 chrome.best「最高纪录」同等约束。
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
 
         app.buttons["chrome.restart"].tap()
         XCTAssertEqual(board.value as? String, SokobanMoves.start)
         playSokoban(SokobanMoves.long)
-        XCTAssertTrue(app.staticTexts["过关"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["过关"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["chrome.score"].label, "步数 35")
-        XCTAssertEqual(app.staticTexts["chrome.best"].label, "最高纪录 33")
+        XCTAssertEqual(app.staticTexts["sokoban.best"].label, "本关纪录 33")
         app.buttons["chrome.back"].tap()
         XCTAssertTrue(app.buttons["home.row.sokoban"].waitForExistence(timeout: 5))
         return 33
@@ -137,9 +142,36 @@ final class Phase1UITests: XCTestCase {
         return score
     }
 
+    /// 推箱子已改为滑动移一格，不再提供方向键。这里用与 SokobanUITests 同等的滑动输入走完同一条官方解。
     private func playSokoban(_ moves: [String]) {
+        let board = app.descendants(matching: .any)["sokoban.board"]
         for move in moves {
-            app.buttons[move].tap()
+            let direction = move.replacingOccurrences(of: "pad.", with: "")
+            let before = board.value as? String ?? "missing"
+            let point = board.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let distance: CGFloat = 60
+            let delta: CGVector
+            switch direction {
+            case "up": delta = CGVector(dx: 0, dy: -distance)
+            case "down": delta = CGVector(dx: 0, dy: distance)
+            case "left": delta = CGVector(dx: -distance, dy: 0)
+            default: delta = CGVector(dx: distance, dy: 0)
+            }
+            var changed = false
+            for _ in 0..<3 {
+                point.press(forDuration: 0.05, thenDragTo: point.withOffset(delta))
+                let deadline = Date().addingTimeInterval(0.9)
+                while Date() < deadline {
+                    if (board.value as? String ?? "missing") != before {
+                        changed = true
+                        break
+                    }
+                    RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.04))
+                }
+                if changed { break }
+            }
+            // 等步进动画结束，再滑下一步，避免把未完成的滑动吃掉。
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.25))
         }
     }
 
